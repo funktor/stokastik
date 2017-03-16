@@ -8,6 +8,8 @@ SonarData <- Sonar[,1:60]
 
 class.labels <- ifelse(Sonar$Class == "R", 0, 1)
 
+dtm <- as.simple_triplet_matrix(SonarData)
+
 train.idx <- sample(1:nrow(SonarData), 0.7*nrow(SonarData))
 test.idx <- seq(1, nrow(SonarData))[-train.idx]
 
