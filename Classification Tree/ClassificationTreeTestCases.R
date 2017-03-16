@@ -23,7 +23,8 @@ test <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
   preds <- cpp__test(df.test, model)
   
-  mean(preds==class.labels[test.idx])
+  preds <- preds[order(preds$Doc),]
+  mean(preds$Class==class.labels[test.idx])
 }
 
 replicate(10, test(train.dtm, test.dtm, train.idx, test.idx, class.labels))

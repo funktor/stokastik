@@ -27,6 +27,7 @@ struct Node {
 struct InputMetaData {
   std::unordered_map<int, std::unordered_map<double, std::set<int>>> colValAllRowsMap;
   std::unordered_map<int, std::set<double>> colSortedVals;
+  std::unordered_map<int, std::set<int>> rowCols;
   std::unordered_map<int, std::unordered_map<int, double>> rowColValMap;
   std::unordered_map<int, double> instanceWeights;
   std::unordered_map<int, int> rowClassMap;
@@ -124,18 +125,10 @@ Node* createNode(const std::set<int> &currRows,
     
     std::set<int> leftRows, rightRows;
     
-    std::set<int> currCols;
+    std::set<int> thisCols;
     
-    for (auto p = currRows.begin(); p != currRows.end(); ++p) {
-      std::unordered_map<int, double> colValMap = metaData.rowColValMap[*p];
-      for (auto q = colValMap.begin(); q != colValMap.end(); ++q) currCols.insert(q->first);
-    }
-    
-    std::vector<int> colsVec(currCols.begin(), currCols.end());
-    
-    std::random_shuffle(colsVec.begin(), colsVec.end());
-    
-    std::set<int> thisCols(colsVec.begin(), colsVec.begin()+0.5*colsVec.size());
+    for (auto p = currRows.begin(); p != currRows.end(); ++p) 
+      thisCols.insert(metaData.rowCols[*p].begin(), metaData.rowCols[*p].end());
     
     for (auto p = thisCols.begin(); p != thisCols.end(); ++p) {
       
@@ -548,6 +541,7 @@ std::vector<DataFrame> cpp__tree(DataFrame inputSparseMatrix,
   
   for (size_t i = 0; i < rows.size(); i++) metaData.colSortedVals[cols[i]].insert(vals[i]);
   for (size_t i = 0; i < rows.size(); i++) metaData.colValAllRowsMap[cols[i]][vals[i]].insert(rows[i]);
+  for (size_t i = 0; i < rows.size(); i++) metaData.rowCols[rows[i]].insert(cols[i]);
   
   for (auto p = uniqueCols.begin(); p != uniqueCols.end(); ++p) {
     std::set<double> sortedVals = metaData.colSortedVals[*p];
@@ -580,15 +574,15 @@ struct NodeDF {
 };
 
 
-double dfPredict(std::unordered_map<int, NodeDF> &nodeDFMap, 
-                 std::unordered_map<int, double> &colValMap) {
+std::pair<int, double> dfPredict(std::unordered_map<int, NodeDF> &nodeDFMap, 
+                                 std::unordered_map<int, double> &colValMap) {
   
   int index = 0;
-  double output = -1;
+  std::pair<int, double> output;
   
   while(true) {
     if (nodeDFMap[index].featureIndex == -1) {
-      output = nodeDFMap[index].bestClass;
+      output = std::make_pair(nodeDFMap[index].bestClass, nodeDFMap[index].bestClassProb);
       break;
     }
     else {
@@ -601,9 +595,10 @@ double dfPredict(std::unordered_map<int, NodeDF> &nodeDFMap,
 }
 
 // [[Rcpp::export]]
-std::map<int, double> cpp__test(DataFrame inputSparseMatrix, DataFrame model) {
+DataFrame cpp__test(DataFrame inputSparseMatrix, DataFrame model) {
   
-  std::map<int, double> out;
+  std::vector<int> doc, topClass;
+  std::vector<double> topClassProb;
   
   std::vector<int> rows = inputSparseMatrix["i"];
   std::vector<int> cols = inputSparseMatrix["j"];
@@ -638,7 +633,13 @@ std::map<int, double> cpp__test(DataFrame inputSparseMatrix, DataFrame model) {
     nodeDFMap[nodeIndex[i]] = df;
   }
   
-  for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) out[p->first] = dfPredict(nodeDFMap, p->second);
+  for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
+    std::pair<int, double> out = dfPredict(nodeDFMap, p->second);
+    
+    doc.push_back(p->first);
+    topClass.push_back(out.first);
+    topClassProb.push_back(out.second);
+  }
   
-  return out;
+  return DataFrame::create(_["Doc"]=doc, _["Class"]=topClass, _["Probability"]=topClassProb);
 }
