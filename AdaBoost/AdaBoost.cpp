@@ -3,15 +3,17 @@
 #include <fstream>
 #include <queue>
 #include <stack>
+#include <random>
 
 using namespace Rcpp;
 
 typedef std::unordered_map<int, std::unordered_map<double, std::set<int>>> DataFormat;
 
 struct Node {
-  int featureIndex, leafBestClass, numLeavesBranch;
-  double featureDecisionVal, leafBestClassProb, resubErrorBranch;
+  int featureIndex, numLeavesBranch;
+  double featureDecisionVal, resubErrorBranch;
   
+  std::unordered_map<int, double> classProbs;
   std::set<int> rows, leftRows, rightRows;
   
   Node* left;
@@ -29,16 +31,20 @@ struct InputMetaData {
   std::unordered_map<int, std::set<double>> colSortedVals;
   std::unordered_map<int, std::set<int>> rowCols;
   std::unordered_map<int, std::unordered_map<int, double>> rowColValMap;
+  std::unordered_map<int, double> instanceWeights;
   std::unordered_map<int, int> rowClassMap;
+  std::set<int> classLabels;
 };
 
 std::unordered_map<int, double> computeClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
   
   std::unordered_map<int, double> classProbs;
-
+  
+  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) classProbs[*p] = 0;
+  
   for (auto p = rows.begin(); p != rows.end(); ++p) classProbs[metaData.rowClassMap[*p]]++;
   
-  for (auto p = classProbs.begin(); p != classProbs.end(); ++p) classProbs[p->first] = (p->second)/(double)rows.size();
+  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) classProbs[*p] /= (double)rows.size();
   
   return classProbs;
 }
@@ -87,12 +93,8 @@ Node* getLeafNode(const std::set<int> &rows, InputMetaData &metaData) {
   node->featureIndex = -1;
   node->featureDecisionVal = -1;
   
-  std::unordered_map<int, double> classProbs = computeClassProbs(rows, metaData);
+  node->classProbs = computeClassProbs(rows, metaData);
   
-  std::pair<int, double> best = bestClass(classProbs);
-  
-  node->leafBestClass = best.first;
-  node->leafBestClassProb = best.second;
   node->rows = rows;
   
   node->left = NULL;
@@ -107,9 +109,10 @@ Node* createNode(const std::set<int> &currRows,
   
   Node *node = new Node();
   
-  double ent = entropy(currRows, metaData);
+  std::unordered_map<int, double> classProbs = computeClassProbs(currRows, metaData);
+  std::pair<int, double> best = bestClass(classProbs);
   
-  if (ent == 0) node = getLeafNode(currRows, metaData);
+  if (best.second >= 0.9) node = getLeafNode(currRows, metaData);
   
   else {
     double maxFeatureGain = 0;
@@ -211,8 +214,8 @@ Node* createNode(const std::set<int> &currRows,
       
       node->featureIndex = featureIdx;
       node->featureDecisionVal = featureDecisionVal;
-      node->leafBestClass = -1;
-      node->leafBestClassProb = 0;
+      
+      node->classProbs = computeClassProbs(currRows, metaData);
       
       node->rows = currRows;
       
@@ -253,10 +256,10 @@ Node* constructTree(const std::set<int> &rows,
   return root;
 }
 
-DataFrame transformTreeIntoDF(Node* &node) {
+DataFrame transformTreeIntoDF(Node* &node, DataFrame &leafNodeClassProbs) {
   
-  std::vector<int> nodeIndex, leftNodeIndex, rightNodeIndex, featureIndex, bestClass;
-  std::vector<double> featureDecisionVal, bestClassProb;
+  std::vector<int> nodeIndex, leftNodeIndex, rightNodeIndex, featureIndex, leafLabels, leafIndices;
+  std::vector<double> featureDecisionVal, leafLabelProbs;
   
   std::queue<Node*> nodeQ;
   nodeQ.push(node);
@@ -271,36 +274,42 @@ DataFrame transformTreeIntoDF(Node* &node) {
     featureIndex.push_back(n->featureIndex);
     featureDecisionVal.push_back(n->featureDecisionVal);
     
-    bestClass.push_back(n->leafBestClass);
-    bestClassProb.push_back(n->leafBestClassProb);
-    
     if (n->left != NULL) {
-      lastIndex++;
-      leftNodeIndex.push_back(lastIndex);
+      leftNodeIndex.push_back(++lastIndex);
       nodeQ.push(n->left);
-    }
-    else leftNodeIndex.push_back(-1);
-    
-    if (n->right != NULL) {
-      lastIndex++;
-      rightNodeIndex.push_back(lastIndex);
+      
+      rightNodeIndex.push_back(++lastIndex);
       nodeQ.push(n->right);
     }
-    else rightNodeIndex.push_back(-1);
+    
+    else {
+      leftNodeIndex.push_back(-1);
+      rightNodeIndex.push_back(-1);
+      
+      std::unordered_map<int, double> predProbs = n->classProbs;
+      
+      for (auto p = predProbs.begin(); p != predProbs.end(); ++p) {
+        leafLabels.push_back(p->first);
+        leafIndices.push_back(index);
+        leafLabelProbs.push_back(p->second);
+      }
+    }
     
     nodeQ.pop();
     index++;
   }
   
+  leafNodeClassProbs = DataFrame::create(_["LeafIndex"]=leafIndices, _["LeafLabel"]=leafLabels, _["LeafLabelProb"]=leafLabelProbs);
+  
   return DataFrame::create(_["NodeIndex"]=nodeIndex, _["LeftNodeIndex"]=leftNodeIndex, 
                            _["RightNodeIndex"]=rightNodeIndex, _["FeatureIndex"]=featureIndex, 
-                           _["FeatureDecisionVal"]=featureDecisionVal, _["Class"]=bestClass, 
-                           _["ClassProb"]=bestClassProb);
+                           _["FeatureDecisionVal"]=featureDecisionVal);
 }
 
-int treePredict(Node* &node, std::unordered_map<int, double> &colValMap) {
+std::unordered_map<int, double> treePredict(Node* &node, 
+                                            std::unordered_map<int, double> &colValMap) {
   
-  if (node->featureIndex == -1) return node->leafBestClass;
+  if (node->featureIndex == -1) return node->classProbs;
   
   else {
     int decisionFeature = node->featureIndex;
@@ -318,47 +327,13 @@ double observedErrors(Node* &node, std::set<int> &rows, InputMetaData &metaData)
   for (auto p = rows.begin(); p != rows.end(); ++p) {
     std::unordered_map<int, double> colValMap = metaData.rowColValMap[*p];
     
-    int pred = treePredict(node, colValMap);
-    if (pred != metaData.rowClassMap[*p]) errors++;
+    std::unordered_map<int, double> preds = treePredict(node, colValMap);
+    std::pair<int, double> best = bestClass(preds);
+    
+    if (best.first != metaData.rowClassMap[*p]) errors += metaData.instanceWeights[*p];
   }
   
   return errors;
-}
-
-double prunedErrors(Node* &node, std::set<int> &rows, InputMetaData &metaData) {
-  
-  double errors = 0;
-  
-  std::set<int> nodeRows = node->rows;
-  std::unordered_map<int, double> classProbs;
-  
-  for (auto p = nodeRows.begin(); p != nodeRows.end(); ++p) classProbs[metaData.rowClassMap[*p]]++;
-  std::pair<int, double> best = bestClass(classProbs);
-  
-  int prunPred = best.first;
-  
-  for (auto p = rows.begin(); p != rows.end(); ++p) if (prunPred != metaData.rowClassMap[*p]) errors++;
-  
-  return errors;
-}
-
-std::pair<Node*, double> maxPruneRedErr(Node* &node, std::set<int> &validationRows, InputMetaData &metaData) {
-  
-  if (node->left == NULL) return std::make_pair(node, 0);
-  
-  else {
-    std::pair<Node*, double> maxErrLeft = maxPruneRedErr(node->left, validationRows, metaData);
-    std::pair<Node*, double> maxErrRight = maxPruneRedErr(node->right, validationRows, metaData);
-    
-    double obsvErr = observedErrors(node, validationRows, metaData);
-    double pruneErr = prunedErrors(node, validationRows, metaData);
-    
-    double g = (obsvErr-pruneErr)/obsvErr;
-    
-    if (g >= maxErrLeft.second && g >= maxErrRight.second) return std::make_pair(node, g);
-    else if (maxErrLeft.second >= maxErrRight.second) return maxErrLeft;
-    else return maxErrRight;
-  }
 }
 
 Node* redPrune(Node* &node, InputMetaData &metaData, Node* &maxPruneNode) {
@@ -376,11 +351,18 @@ Node* redPrune(Node* &node, InputMetaData &metaData, Node* &maxPruneNode) {
 
 double resbstitutionError(Node* &node, 
                           InputMetaData &metaData, int totalRows) {
+
+  std::set<int> rows = node->rows;
+  std::set<int> labels = metaData.classLabels;
   
-  std::unordered_map<int, double> classProbs = computeClassProbs(node->rows, metaData);
+  std::unordered_map<int, double> classProbs = computeClassProbs(rows, metaData);
   std::pair<int, double> best = bestClass(classProbs);
   
-  return (1-best.second)*(double)node->rows.size()/(double)totalRows;
+  double errors = 0;
+  
+  for (auto p = rows.begin(); p != rows.end(); ++p) errors += metaData.instanceWeights[*p]*(1-best.second);
+  
+  return errors;
 }
 
 Node* resubstitutionErrorBranches(Node* &node, InputMetaData &metaData, int totalRows) {
@@ -458,22 +440,6 @@ std::map<std::string, std::set<int>> trainValidationPartition(const std::set<int
   return output;
 }
 
-Node* reducedPruning(const std::set<int> &allRows, InputMetaData &metaData) {
-  
-  std::map<std::string, std::set<int>> partition = trainValidationPartition(allRows);
-  
-  Node* tree = constructTree(partition["train"], metaData, giniImpurity);
-  
-  std::pair<Node*, double> maxPrune = maxPruneRedErr(tree, partition["validation"], metaData);
-  
-  while(maxPrune.second > 0) {
-    tree = redPrune(tree, metaData, maxPrune.first);
-    maxPrune = maxPruneRedErr(tree, partition["validation"], metaData);
-  }
-  
-  return tree;
-}
-
 Node* costComplexityPrune(const std::set<int> &allRows, InputMetaData &metaData) {
   
   std::map<std::string, std::set<int>> partition = trainValidationPartition(allRows);
@@ -501,27 +467,33 @@ Node* costComplexityPrune(const std::set<int> &allRows, InputMetaData &metaData)
     }
   }
   
-  tree = constructTree(allRows, metaData, giniImpurity);
+  Node* fullTree = constructTree(allRows, metaData, giniImpurity);
   
-  tree = resubstitutionErrorBranches(tree, metaData, (int)tree->rows.size());
-  tree = nodeNumLeaves(tree);
+  fullTree = resubstitutionErrorBranches(fullTree, metaData, (int)fullTree->rows.size());
+  fullTree = nodeNumLeaves(fullTree);
   
-  while(tree->left != NULL) {
-    std::pair<Node*, double> minComplexityNode = getMinComplexityNode(tree, metaData);
+  while(fullTree->left != NULL) {
+    std::pair<Node*, double> minComplexityNode = getMinComplexityNode(fullTree, metaData);
     
-    tree = redPrune(tree, metaData, minComplexityNode.first);
+    fullTree = redPrune(fullTree, metaData, minComplexityNode.first);
     
-    tree = resubstitutionErrorBranches(tree, metaData, (int)tree->rows.size());
-    tree = nodeNumLeaves(tree);
+    fullTree = resubstitutionErrorBranches(fullTree, metaData, (int)fullTree->rows.size());
+    fullTree = nodeNumLeaves(fullTree);
     
     if (minComplexityNode.second >= alpha) break;
   }
   
-  return tree;
+  return fullTree;
 }
 
 // [[Rcpp::export]]
-std::vector<DataFrame> cpp__tree(DataFrame inputSparseMatrix, std::vector<int> classLabels) {
+List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabels, 
+                         int boostingRounds = 5) {
+  
+  std::vector<DataFrame> trees;
+  std::vector<double> treeWeights;
+  
+  std::vector<DataFrame> leafNodeClassProbs;
   
   InputMetaData metaData;
   
@@ -531,6 +503,9 @@ std::vector<DataFrame> cpp__tree(DataFrame inputSparseMatrix, std::vector<int> c
   
   std::set<int> uniqueRows(rows.begin(), rows.end());
   std::set<int> uniqueCols(cols.begin(), cols.end());
+  std::set<int> uniqueLabels(classLabels.begin(), classLabels.end());
+  
+  metaData.classLabels = uniqueLabels;
   
   for (size_t i = 0; i < rows.size(); i++) metaData.colSortedVals[cols[i]].insert(vals[i]);
   for (size_t i = 0; i < rows.size(); i++) metaData.colValAllRowsMap[cols[i]][vals[i]].insert(rows[i]);
@@ -546,92 +521,142 @@ std::vector<DataFrame> cpp__tree(DataFrame inputSparseMatrix, std::vector<int> c
   }
   
   for (size_t i = 0; i < rows.size(); i++) metaData.rowColValMap[rows[i]][cols[i]] = vals[i];
-
   for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.rowClassMap[*p] = classLabels[*p-1];
   
-  Node* node=new Node();
+  for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p]=1/(double)uniqueRows.size();
   
-  std::vector<DataFrame> treeDF;
+  int iterNum = 1;
   
-  node = costComplexityPrune(uniqueRows, metaData);
+  while(iterNum <= boostingRounds) {
+
+    Node* node = costComplexityPrune(uniqueRows, metaData);
+    double err = observedErrors(node, uniqueRows, metaData);
+    
+    if (err > 0.5 || err <= 0) break;
+    
+    double treeWt = log((1-err)/err)+log(uniqueLabels.size()-1);
+    
+    DataFrame predClassProbs;
+    
+    trees.push_back(transformTreeIntoDF(node, predClassProbs));
+    treeWeights.push_back(treeWt);
+    
+    leafNodeClassProbs.push_back(predClassProbs);
+    
+    double sum = 0;
+    
+    for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
+      std::unordered_map<int, double> predClassProbs = treePredict(node, metaData.rowColValMap[*p]);
+      std::pair<int, double> best = bestClass(predClassProbs);
+      
+      if (best.first != metaData.rowClassMap[*p]) metaData.instanceWeights[*p] *= exp(treeWt);
+      
+      sum += metaData.instanceWeights[*p];
+    }
+    
+    for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p] /= sum;
+    
+    iterNum++;
+  }
   
-  treeDF.push_back(transformTreeIntoDF(node));
+  double sumTreeWeights = 0;
   
-  return treeDF;
+  for (size_t i = 0; i < treeWeights.size(); i++) sumTreeWeights += treeWeights[i];
+  for (size_t i = 0; i < treeWeights.size(); i++) treeWeights[i] /= sumTreeWeights;
+  
+  return List::create(_["Trees"]=trees, _["TreeWeights"]=treeWeights, _["TreeClassProbs"]=leafNodeClassProbs);
 }
 
 struct NodeDF {
-  int index, leftIndex, rightIndex, featureIndex, bestClass;
-  double decisionVal, bestClassProb;
+  int index, leftIndex, rightIndex, featureIndex;
+  double decisionVal;
 };
 
 
-std::pair<int, double> dfPredict(std::unordered_map<int, NodeDF> &nodeDFMap, 
-                                 std::unordered_map<int, double> &colValMap) {
-  
+std::unordered_map<int, double> dfPredict(std::unordered_map<int, NodeDF> &nodeDFMap,
+                                 std::unordered_map<int, double> &colValMap,
+                                 std::unordered_map<int, std::unordered_map<int, double>> &predClassProbs) {
+
   int index = 0;
-  std::pair<int, double> output;
-  
+
   while(true) {
-    if (nodeDFMap[index].featureIndex == -1) {
-      output = std::make_pair(nodeDFMap[index].bestClass, nodeDFMap[index].bestClassProb);
-      break;
-    }
+    if (nodeDFMap[index].featureIndex == -1) return predClassProbs[index];
     else {
       if (colValMap[nodeDFMap[index].featureIndex] <= nodeDFMap[index].decisionVal) index = nodeDFMap[index].leftIndex;
       else index = nodeDFMap[index].rightIndex;
     }
   }
-  
-  return output;
 }
 
 // [[Rcpp::export]]
-DataFrame cpp__test(DataFrame inputSparseMatrix, DataFrame model) {
-  
+DataFrame cpp__test(DataFrame inputSparseMatrix, List modelsMetaData) {
+
   std::vector<int> doc, topClass;
   std::vector<double> topClassProb;
-  
+
   std::vector<int> rows = inputSparseMatrix["i"];
   std::vector<int> cols = inputSparseMatrix["j"];
   std::vector<double> vals = inputSparseMatrix["v"];
   
-  std::vector<int> nodeIndex = model["NodeIndex"];
-  std::vector<int> leftNodeIndex = model["LeftNodeIndex"];
-  std::vector<int> rightNodeIndex = model["RightNodeIndex"];
-  std::vector<int> featureIndex = model["FeatureIndex"];
-  std::vector<int> bestClass = model["Class"];
-  
-  std::vector<double> featureDecisionVal = model["FeatureDecisionVal"];
-  std::vector<double> bestClassProb = model["ClassProb"];
-  
   std::unordered_map<int, std::unordered_map<int, double>> rowColValMap;
   
   for (size_t i = 0; i < rows.size(); i++) rowColValMap[rows[i]][cols[i]] = vals[i];
-  
-  std::unordered_map<int, NodeDF> nodeDFMap;
-  
-  for (size_t i = 0; i < nodeIndex.size(); i++) {
-    NodeDF df;
+
+  std::vector<DataFrame> models = modelsMetaData["Trees"];
+  std::vector<double> modelWeights = modelsMetaData["TreeWeights"];
+  std::vector<DataFrame> leafNodeClassProbs = modelsMetaData["TreeClassProbs"];
+
+  std::unordered_map<int, std::unordered_map<int, double>> predProbs;
+
+  for (size_t i = 0; i < models.size(); i++) {
+    DataFrame model = models[i];
+
+    std::vector<int> nodeIndex = model["NodeIndex"];
+    std::vector<int> leftNodeIndex = model["LeftNodeIndex"];
+    std::vector<int> rightNodeIndex = model["RightNodeIndex"];
+    std::vector<int> featureIndex = model["FeatureIndex"];
+    std::vector<double> featureDecisionVal = model["FeatureDecisionVal"];
     
-    df.index = nodeIndex[i];
-    df.decisionVal = featureDecisionVal[i];
-    df.featureIndex = featureIndex[i];
-    df.bestClass = bestClass[i];
-    df.bestClassProb = bestClassProb[i];
-    df.leftIndex = leftNodeIndex[i];
-    df.rightIndex = rightNodeIndex[i];
+    DataFrame leafNodeClassProb = leafNodeClassProbs[i];
     
-    nodeDFMap[nodeIndex[i]] = df;
+    std::vector<int> leafIndex = leafNodeClassProb["LeafIndex"];
+    std::vector<int> leafLabel = leafNodeClassProb["LeafLabel"];
+    std::vector<double> leafLabelProb = leafNodeClassProb["LeafLabelProb"];
+    
+    std::unordered_map<int, std::unordered_map<int, double>> predClassProbs;
+    
+    for (size_t j = 0; j < leafIndex.size(); j++) predClassProbs[leafIndex[j]][leafLabel[j]] = leafLabelProb[j];
+
+    std::unordered_map<int, NodeDF> nodeDFMap;
+
+    for (size_t j = 0; j < nodeIndex.size(); j++) {
+      NodeDF df;
+
+      df.index = nodeIndex[j];
+      df.decisionVal = featureDecisionVal[j];
+      df.featureIndex = featureIndex[j];
+      df.leftIndex = leftNodeIndex[j];
+      df.rightIndex = rightNodeIndex[j];
+
+      nodeDFMap[nodeIndex[j]] = df;
+    }
+
+    for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
+      std::unordered_map<int, double> out = dfPredict(nodeDFMap, p->second, predClassProbs);
+      std::pair<int, double> best = bestClass(out);
+      
+      predProbs[p->first][best.first] += modelWeights[i];
+    }
   }
-  
-  for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
-    std::pair<int, double> out = dfPredict(nodeDFMap, p->second);
-    
+
+  for (auto p = predProbs.begin(); p != predProbs.end(); ++p) {
+    std::unordered_map<int, double> classProbs = p->second;
+    std::pair<int, double> best = bestClass(classProbs);
+
     doc.push_back(p->first);
-    topClass.push_back(out.first);
-    topClassProb.push_back(out.second);
+    topClass.push_back(best.first);
+    topClassProb.push_back(best.second);
   }
-  
+
   return DataFrame::create(_["Doc"]=doc, _["Class"]=topClass, _["Probability"]=topClassProb);
 }

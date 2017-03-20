@@ -1,6 +1,6 @@
 library("mlbench")
 library("slam")
-Rcpp::sourceCpp('ClassificationTree.cpp')
+#Rcpp::sourceCpp('ClassificationTree.cpp')
 
 data(Sonar)
 
@@ -18,10 +18,24 @@ test.dtm <- dtm[test.idx,]
 
 test <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  model <- cpp__tree(df.train, class.labels[train.idx], rep(1/nrow(train.dtm), nrow(train.dtm)))
+  model <- cpp__tree(df.train, class.labels[train.idx])
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
   preds <- cpp__test(df.test, model)
+  
+  preds <- preds[order(preds$Doc),]
+  mean(preds$Class==class.labels[test.idx])
+}
+
+replicate(10, test(train.dtm, test.dtm, train.idx, test.idx, class.labels))
+
+
+test2 <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
+  df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
+  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 10)
+  
+  df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
+  preds <- cpp__test(df.test, models)
   
   preds <- preds[order(preds$Doc),]
   mean(preds$Class==class.labels[test.idx])
