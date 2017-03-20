@@ -16,7 +16,7 @@ test.idx <- seq(1, nrow(SonarData))[-train.idx]
 train.dtm <- dtm[train.idx,]
 test.dtm <- dtm[test.idx,]
 
-test <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
+test.tree <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
   model <- cpp__tree(df.train, class.labels[train.idx])
   
@@ -27,18 +27,18 @@ test <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   mean(preds$Class==class.labels[test.idx])
 }
 
-replicate(10, test(train.dtm, test.dtm, train.idx, test.idx, class.labels))
+replicate(10, test.tree(train.dtm, test.dtm, train.idx, test.idx, class.labels))
 
 
-test2 <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
+test.adaboost <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
   models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 10)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
-  preds <- cpp__test(df.test, models)
+  preds <- cpp__test(test.df, models)
   
-  preds <- preds[order(preds$Doc),]
-  mean(preds$Class==class.labels[test.idx])
+  preds <- unlist(lapply(preds, function(x) as.integer(names(which(x == max(x))))))
+  mean(preds == test.class.labels)
 }
 
-replicate(10, test(train.dtm, test.dtm, train.idx, test.idx, class.labels))
+replicate(10, test.adaboost(train.dtm, test.dtm, train.idx, test.idx, class.labels))
