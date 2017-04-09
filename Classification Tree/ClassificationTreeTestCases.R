@@ -18,13 +18,13 @@ test.dtm <- dtm[test.idx,]
 
 test.tree <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  model <- cpp__tree(df.train, class.labels[train.idx])
+  models <- cpp__tree(df.train, class.labels[train.idx], cvRounds = 3)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
-  preds <- cpp__test(df.test, model)
+  preds <- cpp__test(df.test, models)
   
-  preds <- preds[order(preds$Doc),]
-  mean(preds$Class==class.labels[test.idx])
+  preds <- unlist(lapply(preds, function(x) as.integer(names(which(x == max(x))))))
+  mean(preds == class.labels[test.idx])
 }
 
 replicate(10, test.tree(train.dtm, test.dtm, train.idx, test.idx, class.labels))
@@ -32,13 +32,13 @@ replicate(10, test.tree(train.dtm, test.dtm, train.idx, test.idx, class.labels))
 
 test.adaboost <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 10)
+  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 5, maxDepth = 300)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
-  preds <- cpp__test(test.df, models)
+  preds <- cpp__test(df.test, models)
   
   preds <- unlist(lapply(preds, function(x) as.integer(names(which(x == max(x))))))
-  mean(preds == test.class.labels)
+  mean(preds == class.labels[test.idx])
 }
 
 replicate(10, test.adaboost(train.dtm, test.dtm, train.idx, test.idx, class.labels))

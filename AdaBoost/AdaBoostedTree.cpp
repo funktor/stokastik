@@ -400,27 +400,38 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
       }
     }
     
-    if (err > 0.5 || err <= 0) break;
+    double treeWt;
     
-    double treeWt = log((1-err)/err)+log(uniqueLabels.size()-1);
-    
-    DataFrame predClassProbs;
-    
-    trees.push_back(transformTreeIntoDF(tree, predClassProbs));
-    treeWeights.push_back(treeWt);
-    
-    leafNodeClassProbs.push_back(predClassProbs);
-    
-    double sumWeights = 0;
-    
-    for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
-      if (errorRows.find(*p) != errorRows.end()) metaData.instanceWeights[*p] *= exp(treeWt);
-      sumWeights += metaData.instanceWeights[*p];
+    if (err > 0.5 || err <= 0) {
+      DataFrame predClassProbs;
+      
+      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
+      treeWeights.push_back(1.0);
+      
+      leafNodeClassProbs.push_back(predClassProbs);
+      break;
     }
-    
-    for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p] /= sumWeights;
-    
-    iterNum++;
+    else {
+      treeWt = log((1-err)/err)+log(uniqueLabels.size()-1);
+      
+      DataFrame predClassProbs;
+      
+      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
+      treeWeights.push_back(treeWt);
+      
+      leafNodeClassProbs.push_back(predClassProbs);
+      
+      double sumWeights = 0;
+      
+      for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
+        if (errorRows.find(*p) != errorRows.end()) metaData.instanceWeights[*p] *= exp(treeWt);
+        sumWeights += metaData.instanceWeights[*p];
+      }
+      
+      for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p] /= sumWeights;
+      
+      iterNum++;
+    }
   }
   
   double sumTreeWeights = 0;
