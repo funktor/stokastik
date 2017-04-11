@@ -3,100 +3,124 @@
 #include <fstream>
 #include <queue>
 #include <stack>
-#include <random>
 
 using namespace Rcpp;
 
-typedef std::unordered_map<int, std::unordered_map<double, std::set<int>>> DataFormat;
+typedef std::unordered_map<int, std::unordered_map<double, std::set<int>>> Int_Double_SetInt;
+typedef std::unordered_map<int, std::set<double>> Int_SetDouble;
+typedef std::unordered_map<int, std::set<int>> Int_SetInt;
+typedef std::unordered_map<int, std::unordered_map<int, double>> Int_Int_Double;
+typedef std::unordered_map<int, double> Int_Double;
+typedef std::unordered_map<int, int> Int_Int;
+typedef std::unordered_map<int, std::unordered_map<double, double>> Int_Double_Double;
+typedef std::unordered_map<double, std::set<int>> Double_SetInt;
+typedef std::unordered_map<double, double> Double_Double;
 
-struct Node {
-  int featureIndex, depth;
+struct Split {
+  int featureIndex;
   double featureDecisionVal;
   
-  std::unordered_map<int, double> classProbs;
-  std::set<int> rows, leftRows, rightRows;
+  std::set<int> leftRows, rightRows;
+};
+
+struct Node {
+  
+  Split bestSplit;
+  
+  Int_Double classProbs;
+  
+  int depth, numLeavesBranch;
+  double resubErrorBranch;
+  
+  std::set<int> rows;
   
   Node* left;
   Node* right;
   
   bool operator==(const Node* x){
-    return this->featureDecisionVal == x->featureDecisionVal 
-    && this->featureIndex == x->featureIndex 
-    && this->rows.size() == x->rows.size();
+    return this->bestSplit.featureDecisionVal == x->bestSplit.featureDecisionVal 
+    && this->bestSplit.featureIndex == x->bestSplit.featureIndex 
+    && this->rows.size() == x->rows.size() && this->depth == x->depth;
   }
 };
 
 struct InputMetaData {
-  std::unordered_map<int, std::unordered_map<double, std::set<int>>> colValAllRowsMap;
-  std::unordered_map<int, std::set<double>> colSortedVals;
-  std::unordered_map<int, std::set<int>> rowCols;
-  std::unordered_map<int, std::unordered_map<int, double>> rowColValMap;
-  std::unordered_map<int, double> instanceWeights;
-  std::unordered_map<int, int> rowClassMap;
+  Int_Double_SetInt colValAllRowsMap;
+  Int_SetDouble colSortedVals;
+  Int_SetInt rowCols;
+  Int_Int_Double rowColValMap;
+  Int_Double instanceWeights;
+  Int_Int rowClassMap;
+  
   std::set<int> classLabels;
 };
 
-std::unordered_map<int, double> computeClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
+Node* copyNode(Node* a) {
+  Node* b = new Node();
   
-  std::unordered_map<int, double> classProbs;
+  if (a == NULL) b = NULL;
+  else {
+    b->bestSplit = a->bestSplit;
+    b->classProbs = a->classProbs;
+    b->depth = a->depth;
+    b->numLeavesBranch = a->numLeavesBranch;
+    b->resubErrorBranch =  a->resubErrorBranch;
+    b->rows =  a->rows;
+    
+    b->left = copyNode(a->left);
+    b->right = copyNode(a->right);
+  }
+  
+  return b;
+}
+
+Int_Double computeClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
+  
+  Int_Double classProbs;
   
   for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) classProbs[*p] = 0;
   
-  double weightSum = 0;
+  double weightSum = std::accumulate(rows.begin(), rows.end(), 0.0, 
+                                     [&metaData](double weightSum, const int &row){return weightSum + metaData.instanceWeights[row];});
   
-  for (auto p = rows.begin(); p != rows.end(); ++p) {
-    classProbs[metaData.rowClassMap[*p]] += metaData.instanceWeights[*p];
-    weightSum += metaData.instanceWeights[*p];
-  }
-  
-  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) classProbs[*p] /= weightSum;
+  for (auto p = rows.begin(); p != rows.end(); ++p) classProbs[metaData.rowClassMap[*p]] += metaData.instanceWeights[*p]/weightSum;
   
   return classProbs;
 }
 
 double giniImpurity(const std::set<int> &rows, InputMetaData &metaData) {
   
-  std::unordered_map<int, double> classProbs = computeClassProbs(rows, metaData);
+  Int_Double classProbs = computeClassProbs(rows, metaData);
   
-  double impurity = 0;
-  
-  for (auto p = classProbs.begin(); p != classProbs.end(); ++p) impurity += (p->second)*(1-p->second);
+  double impurity = std::accumulate(classProbs.begin(), classProbs.end(), 0.0, 
+                                    [](double impurity, const std::pair<int, double> &a){return impurity + a.second*(1-a.second);});
   
   return impurity;
 }
 
 double entropy(const std::set<int> &rows, InputMetaData &metaData) {
   
-  std::unordered_map<int, double> classProbs = computeClassProbs(rows, metaData);
+  Int_Double classProbs = computeClassProbs(rows, metaData);
   
-  double entropy = 0;
+  double impurity = std::accumulate(classProbs.begin(), classProbs.end(), 0.0, 
+                                    [](double impurity, const std::pair<int, double> &a){return impurity - a.second*log2(a.second);});
   
-  for (auto p = classProbs.begin(); p != classProbs.end(); ++p) entropy += -(p->second)*log2(p->second);
-  
-  return entropy;
+  return impurity;
 }
 
-std::pair<int, double> bestClass(std::unordered_map<int, double> &classProbs) {
+std::pair<int, double> bestClass(Int_Double &classProbs) {
   
-  double maxProb = std::numeric_limits<double>::min();
-  int bestClass = -1;
+  auto it = std::max_element(classProbs.begin(), classProbs.end(), 
+                             [](const std::pair<int, double> &a, const std::pair<int, double> &b){return a.second < b.second;});
   
-  for (auto p = classProbs.begin(); p != classProbs.end(); ++p) {
-    if (p->second > maxProb) {
-      maxProb = p->second;
-      bestClass = p->first;
-    }
-  }
-  
-  return std::make_pair(bestClass, maxProb);
+  return *it;
 }
 
 Node* getLeafNode(const std::set<int> &rows, InputMetaData &metaData) {
   
   Node *node = new Node();
   
-  node->featureIndex = -1;
-  node->featureDecisionVal = -1;
+  node->bestSplit = {-1, -1, std::set<int>(), std::set<int>()};
   
   node->classProbs = computeClassProbs(rows, metaData);
   
@@ -115,7 +139,7 @@ Node* createNode(const std::set<int> &currRows,
   
   Node *node = new Node();
   
-  std::unordered_map<int, double> classProbs = computeClassProbs(currRows, metaData);
+  Int_Double classProbs = computeClassProbs(currRows, metaData);
   
   if ((int)classProbs.size() == 1 || maxDepthReached) node = getLeafNode(currRows, metaData);
   
@@ -124,43 +148,45 @@ Node* createNode(const std::set<int> &currRows,
     double featureDecisionVal = -1;
     int featureIdx = -1;
     
-    double totalCost=costFuntion(currRows, metaData);
+    std::set<int> leftRows, rightRows, thisCols;
     
-    std::set<int> leftRows, rightRows;
-    
-    std::set<int> currCols;
+    Int_SetDouble thisColValsMap;
     
     for (auto p = currRows.begin(); p != currRows.end(); ++p) {
-      std::unordered_map<int, double> colValMap = metaData.rowColValMap[*p];
-      for (auto q = colValMap.begin(); q != colValMap.end(); ++q) currCols.insert(q->first);
+      std::set<int> cols = metaData.rowCols[*p];
+      thisCols.insert(cols.begin(), cols.end());
+      
+      for (auto q = cols.begin(); q != cols.end(); ++q) thisColValsMap[*q].insert(metaData.rowColValMap[*p][*q]);
     }
     
-    std::vector<int> colsVec(currCols.begin(), currCols.end());
+    std::vector<int> colsVec(thisCols.begin(), thisCols.end());
     
     std::random_shuffle(colsVec.begin(), colsVec.end());
     
-    std::set<int> thisCols(colsVec.begin(), colsVec.begin()+0.05*colsVec.size());
+    std::set<int> thisColsSampled(colsVec.begin(), colsVec.begin()+0.1*colsVec.size());
     
-    for (auto p = thisCols.begin(); p != thisCols.end(); ++p) {
+    for (auto p = thisColsSampled.begin(); p != thisColsSampled.end(); ++p) {
       
       int feature = *p;
       
-      std::set<int> currVals;
-      std::set<double> sortedVals = metaData.colSortedVals[*p];
+      std::set<double> sortedVals = thisColValsMap[feature];
       
       std::set<int> allRows = metaData.colValAllRowsMap[feature][*sortedVals.rbegin()];
-      std::set<int> thisRows, missingRows;
+      
+      std::set<int> thisRows, sparseRows;
       
       std::set_intersection(currRows.begin(), currRows.end(), allRows.begin(), allRows.end(),
                             std::inserter(thisRows, thisRows.end()));
       
       std::set_difference(currRows.begin(), currRows.end(), thisRows.begin(), thisRows.end(),
-                          std::inserter(missingRows, missingRows.end()));
+                          std::inserter(sparseRows, sparseRows.end()));
       
-      if (missingRows.size() > 0) sortedVals.insert(0);
+      if (sparseRows.size() > 0) sortedVals.insert(0);
       
       double maxGain = 0;
       double decisionVal = -1;
+      
+      std::set<int> bestLeftCostRows, bestRightCostRows;
       
       for (auto q = sortedVals.begin(); q != sortedVals.end(); ++q) {
         
@@ -173,7 +199,7 @@ Node* createNode(const std::set<int> &currRows,
                                 std::inserter(leftCostRows, leftCostRows.end()));
         }
         
-        leftCostRows.insert(missingRows.begin(), missingRows.end());
+        leftCostRows.insert(sparseRows.begin(), sparseRows.end());
         
         double leftCost = costFuntion(leftCostRows, metaData);
         
@@ -185,11 +211,15 @@ Node* createNode(const std::set<int> &currRows,
         double w1 = (double)leftCostRows.size()/(double)currRows.size();
         double w2 = (double)rightCostRows.size()/(double)currRows.size();
         
-        double gain = totalCost-(w1*leftCost+w2*rightCost);
+        double totalImpurity=costFuntion(currRows, metaData);
+        
+        double gain = totalImpurity-(w1*leftCost+w2*rightCost);
         
         if (gain > maxGain) {
           maxGain = gain;
           decisionVal = *q;
+          bestLeftCostRows = leftCostRows;
+          bestRightCostRows = rightCostRows;
         }
       }
       
@@ -197,43 +227,23 @@ Node* createNode(const std::set<int> &currRows,
         maxFeatureGain = maxGain;
         featureDecisionVal = decisionVal;
         featureIdx = feature;
+        leftRows = bestLeftCostRows;
+        rightRows = bestRightCostRows;
       }
     }
     
     if (featureIdx != -1) {
       
-      std::set<double> sortedVals = metaData.colSortedVals[featureIdx];
+      std::set<double> sortedVals = thisColValsMap[featureIdx];
       
-      std::set<int> allRows = metaData.colValAllRowsMap[featureIdx][*sortedVals.rbegin()];
-      std::set<int> thisRows, missingRows;
+      node->bestSplit = {featureIdx, featureDecisionVal, leftRows, rightRows};
       
-      std::set_intersection(currRows.begin(), currRows.end(), allRows.begin(), allRows.end(),
-                            std::inserter(thisRows, thisRows.end()));
-      
-      std::set_difference(currRows.begin(), currRows.end(), thisRows.begin(), thisRows.end(),
-                          std::inserter(missingRows, missingRows.end()));
-      
-      std::set<int> leftR = metaData.colValAllRowsMap[featureIdx][featureDecisionVal];
-      
-      std::set_intersection(currRows.begin(), currRows.end(), leftR.begin(), leftR.end(),
-                            std::inserter(leftRows, leftRows.end()));
-      
-      leftRows.insert(missingRows.begin(), missingRows.end());
-      
-      std::set_difference(currRows.begin(), currRows.end(), leftRows.begin(), leftRows.end(), 
-                          std::inserter(rightRows, rightRows.end()));
-      
-      
-      
-      node->featureIndex = featureIdx;
-      node->featureDecisionVal = featureDecisionVal;
-      
-      node->classProbs = computeClassProbs(currRows, metaData);
+      node->bestSplit.featureIndex = featureIdx;
+      node->bestSplit.featureDecisionVal = featureDecisionVal;
       
       node->rows = currRows;
       
-      node->leftRows = leftRows;
-      node->rightRows = rightRows;
+      node->classProbs = computeClassProbs(currRows, metaData);
     }
     
     else node = getLeafNode(currRows, metaData);
@@ -260,11 +270,11 @@ Node* constructTree(const std::set<int> &rows,
     node = nodeQ.front();
     nodeQ.pop();
     
-    if (node->featureDecisionVal != -1) {
+    if (node->bestSplit.featureDecisionVal != -1) {
       bool maxDepthReached = (node->depth == maxDepth-1);
       
-      node->left = createNode(node->leftRows, metaData, costFuntion, maxDepthReached);
-      node->right = createNode(node->rightRows, metaData, costFuntion, maxDepthReached);
+      node->left = createNode(node->bestSplit.leftRows, metaData, costFuntion, maxDepthReached);
+      node->right = createNode(node->bestSplit.rightRows, metaData, costFuntion, maxDepthReached);
       
       node->left->depth = node->depth + 1;
       node->right->depth = node->depth + 1;
@@ -277,7 +287,7 @@ Node* constructTree(const std::set<int> &rows,
   return root;
 }
 
-DataFrame transformTreeIntoDF(Node* &node, DataFrame &leafNodeClassProbs) {
+DataFrame transformTreeIntoDF(Node* node, DataFrame &leafNodeClassProbs) {
   
   std::vector<int> nodeIndex, leftNodeIndex, rightNodeIndex, featureIndex, leafLabels, leafIndices;
   std::vector<double> featureDecisionVal, leafLabelProbs;
@@ -292,8 +302,9 @@ DataFrame transformTreeIntoDF(Node* &node, DataFrame &leafNodeClassProbs) {
     Node* n = nodeQ.front();
     
     nodeIndex.push_back(index);
-    featureIndex.push_back(n->featureIndex);
-    featureDecisionVal.push_back(n->featureDecisionVal);
+    
+    featureIndex.push_back(n->bestSplit.featureIndex);
+    featureDecisionVal.push_back(n->bestSplit.featureDecisionVal);
     
     if (n->left != NULL) {
       leftNodeIndex.push_back(++lastIndex);
@@ -323,27 +334,236 @@ DataFrame transformTreeIntoDF(Node* &node, DataFrame &leafNodeClassProbs) {
   leafNodeClassProbs = DataFrame::create(_["LeafIndex"]=leafIndices, _["LeafLabel"]=leafLabels, _["LeafLabelProb"]=leafLabelProbs);
   
   return DataFrame::create(_["NodeIndex"]=nodeIndex, _["LeftNodeIndex"]=leftNodeIndex, 
-                           _["RightNodeIndex"]=rightNodeIndex, _["FeatureIndex"]=featureIndex, 
+                           _["RightNodeIndex"]=rightNodeIndex, 
+                           _["FeatureIndex"]=featureIndex, 
                            _["FeatureDecisionVal"]=featureDecisionVal);
 }
 
-std::unordered_map<int, double> treePredict(Node* &node, 
-                                            std::unordered_map<int, double> &colValMap) {
+Int_Double treePredict(Node* node, Int_Double &colValMap) {
   
-  if (node->featureIndex == -1) return node->classProbs;
+  if (node->bestSplit.featureIndex == -1) return node->classProbs;
   
   else {
-    int decisionFeature = node->featureIndex;
-    double decisionVal = node->featureDecisionVal;
+    int decisionFeature = node->bestSplit.featureIndex;
+    double decisionVal = node->bestSplit.featureDecisionVal;
     
     if (colValMap[decisionFeature] <= decisionVal) return treePredict(node->left, colValMap);
     else return treePredict(node->right, colValMap);
   }
 }
 
+double resubstitutionErrorNode(Node* node, 
+                               InputMetaData &metaData, int totalRows) {
+  
+  Int_Double classProbs = computeClassProbs(node->rows, metaData);
+  std::pair<int, double> best = bestClass(classProbs);
+  
+  return (1-best.second)*(double)node->rows.size()/(double)totalRows;
+}
+
+Node* resubstitutionErrorBranches(Node* node, InputMetaData &metaData, int totalRows) {
+  
+  if (node->left == NULL) node->resubErrorBranch = resubstitutionErrorNode(node, metaData, totalRows);
+  
+  else {
+    Node* n1 = resubstitutionErrorBranches(node->left, metaData, totalRows);
+    Node* n2 = resubstitutionErrorBranches(node->right, metaData, totalRows);
+    
+    node->resubErrorBranch = n1->resubErrorBranch + n2->resubErrorBranch;
+  }
+  
+  return node;
+}
+
+Node* nodeNumLeaves(Node* node) {
+  
+  if (node->left == NULL) node->numLeavesBranch = 1;
+  else node->numLeavesBranch = nodeNumLeaves(node->left)->numLeavesBranch + nodeNumLeaves(node->right)->numLeavesBranch;
+  
+  return node;
+}
+
+std::pair<Node*, double> getMinComplexityNodes(Node* node, InputMetaData &metaData) {
+  
+  Node* n = node;
+  std::queue<Node*> nodeQ;
+  
+  nodeQ.push(n);
+  
+  int totalRows = node->rows.size();
+  
+  double minComplexity = std::numeric_limits<double>::max();
+  Node* minComplexityNode = new Node();
+  
+  while(!nodeQ.empty()) {
+    Node* n = nodeQ.front();
+    nodeQ.pop();
+    
+    double a = resubstitutionErrorNode(n, metaData, totalRows);
+    double b = n->resubErrorBranch;
+    int c = n->numLeavesBranch;
+    
+    double g = (a-b)/((double)c-1);
+    
+    if (g < minComplexity || (g == minComplexity && n->depth < minComplexityNode->depth)) {
+      minComplexity = g;
+      minComplexityNode = n;
+    }
+    
+    if (n->left != NULL && n->left->left != NULL) nodeQ.push(n->left);
+    if (n->right != NULL && n->right->left != NULL) nodeQ.push(n->right);
+  }
+  
+  return std::make_pair(minComplexityNode, minComplexity);
+}
+
+Node* pruneNode(Node* root, Node* &node, InputMetaData &metaData) {
+  if (root->left == NULL) return root;
+  else if (root == node) {
+    Node* a = getLeafNode(root->rows, metaData);
+    a->depth = 1;
+    return a;
+  }
+  else {
+    root->left = pruneNode(root->left, node, metaData);
+    root->right = pruneNode(root->right, node, metaData);
+  }
+  
+  return root;
+}
+
+std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMetaData &metaData) {
+  std::vector<std::pair<Node*, double>> output;
+  
+  root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+  root = nodeNumLeaves(root);
+  
+  output.push_back(std::make_pair(root, 0));
+  
+  while(root->left != NULL) {
+    std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
+    
+    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
+    
+    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
+    prunedNode = nodeNumLeaves(prunedNode);
+    
+    output.push_back(std::make_pair(prunedNode, minComplexityNodes.second));
+    root = copyNode(prunedNode);
+  }
+  
+  return output;
+}
+
+std::unordered_map<int, Node*> complexityPruneTreeSeqWithComplexities(Node* root, InputMetaData &metaData, 
+                                                                      const std::vector<double> &complexities) {
+  
+  std::unordered_map<int, Node*> output;
+  
+  root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+  root = nodeNumLeaves(root);
+  
+  output[0] = root;
+  
+  int i = 1;
+  
+  while(root->left != NULL) {
+    std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
+    
+    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
+    
+    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
+    prunedNode = nodeNumLeaves(prunedNode);
+    
+    if (complexities.size() > i && complexities[i] < minComplexityNodes.second) output[i++] = prunedNode;
+    
+    root = copyNode(prunedNode);
+  }
+  
+  return output;
+}
+
+Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFoldsCV, const int &maxDepth) {
+  
+  std::vector<double> updatedComplexities;
+  std::vector<std::pair<Node*, double>> treeSeq = complexityPruneTreeSeq(copyNode(node), metaData);
+  
+  for (int i = 0; i < treeSeq.size()-1; i++) updatedComplexities.push_back(treeSeq[i].second*treeSeq[i+1].second);
+  
+  std::set<int> allRows = node->rows;
+  
+  std::vector<int> rowsVec(allRows.begin(), allRows.end());
+  std::random_shuffle(rowsVec.begin(), rowsVec.end());
+  
+  int foldSize = std::ceil((double)allRows.size()/(double)numFoldsCV);
+  
+  Int_Double complexityErrorMap;
+  
+  for (int i = 1; i <= numFoldsCV; i++) {
+    int start = (i-1)*foldSize;
+    int end = i*foldSize;
+    
+    end = (end > rowsVec.size()) ? rowsVec.size():end;
+    
+    std::set<int> validationRows(rowsVec.begin()+start, rowsVec.begin()+end);
+    std::set<int> trainRows;
+    
+    std::set_difference(allRows.begin(), allRows.end(), validationRows.begin(), validationRows.end(),
+                        std::inserter(trainRows, trainRows.begin()));
+    
+    Node* tree = constructTree(trainRows, metaData, giniImpurity, maxDepth);
+    
+    std::unordered_map<int, Node*> subTreeSeq = complexityPruneTreeSeqWithComplexities(copyNode(tree), metaData, updatedComplexities);
+    
+    for (auto p = subTreeSeq.begin(); p != subTreeSeq.end(); ++p) {
+      Node* n = p->second;
+      
+      double error = 0;
+      
+      for (auto q = validationRows.begin(); q != validationRows.end(); ++q) {
+        Int_Double colValMap = metaData.rowColValMap[*q];
+        Int_Double predClasses = treePredict(n, colValMap);
+        
+        std::pair<int, double> out = bestClass(predClasses);
+        
+        if (out.first != metaData.rowClassMap[*q]) error++;
+      }
+      
+      error = (double)error/(double)validationRows.size();
+      
+      complexityErrorMap[p->first] += error;
+    }
+  }
+  
+  double minError = std::numeric_limits<double>::max();
+  int complexityIndex = 0;
+  
+  for (auto p = complexityErrorMap.begin(); p != complexityErrorMap.end(); ++p) {
+    if (p->second < minError) {
+      minError = p->second;
+      complexityIndex = p->first;
+    }
+  }
+  
+  return treeSeq[complexityIndex].first;
+}
+
+void foldColValRowsMap(const std::set<int> &featureSet, InputMetaData &metaData) {
+  
+  for (auto p = featureSet.begin(); p != featureSet.end(); ++p) {
+    
+    std::set<double> sortedVals = metaData.colSortedVals[*p];
+    std::vector<double> sortedValsVec(sortedVals.begin(), sortedVals.end());
+    
+    for (size_t i = 1; i < sortedValsVec.size(); i++) 
+      metaData.colValAllRowsMap[*p][sortedValsVec[i]].insert(metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].begin(), 
+                                                             metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].end());
+  }
+}
+
 // [[Rcpp::export]]
 List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabels, 
-                         int boostingRounds = 5, int maxDepth=100) {
+                         int boostingRounds = 5, int maxDepth=100, int cvRounds=5) {
   
   std::vector<DataFrame> trees;
   std::vector<double> treeWeights;
@@ -366,19 +586,13 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
   for (size_t i = 0; i < rows.size(); i++) metaData.colValAllRowsMap[cols[i]][vals[i]].insert(rows[i]);
   for (size_t i = 0; i < rows.size(); i++) metaData.rowCols[rows[i]].insert(cols[i]);
   
-  for (auto p = uniqueCols.begin(); p != uniqueCols.end(); ++p) {
-    std::set<double> sortedVals = metaData.colSortedVals[*p];
-    std::vector<double> sortedValsVec(sortedVals.begin(), sortedVals.end());
-    
-    for (size_t i = 1; i < sortedValsVec.size(); i++) 
-      metaData.colValAllRowsMap[*p][sortedValsVec[i]].insert(metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].begin(), 
-                                                             metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].end());
-  }
-  
   for (size_t i = 0; i < rows.size(); i++) metaData.rowColValMap[rows[i]][cols[i]] = vals[i];
+  
   for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.rowClassMap[*p] = classLabels[*p-1];
   
   for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p]=1/(double)uniqueRows.size();
+  
+  foldColValRowsMap(uniqueCols, metaData);
   
   int iterNum = 1;
   
@@ -386,12 +600,14 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
     
     Node* tree = constructTree(uniqueRows, metaData, giniImpurity, maxDepth);
     
+    Node* prunedTree = costComplexityPrune(tree, metaData, cvRounds, maxDepth);
+    
     double err = 0;
     
     std::set<int> errorRows;
     
     for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
-      std::unordered_map<int, double> predClassProbs = treePredict(tree, metaData.rowColValMap[*p]);
+      std::unordered_map<int, double> predClassProbs = treePredict(prunedTree, metaData.rowColValMap[*p]);
       std::pair<int, double> best = bestClass(predClassProbs);
       
       if (best.first != metaData.rowClassMap[*p]) {
@@ -405,7 +621,7 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
     if (err > 0.5 || err <= 0) {
       DataFrame predClassProbs;
       
-      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
+      trees.push_back(transformTreeIntoDF(prunedTree, predClassProbs));
       treeWeights.push_back(1.0);
       
       leafNodeClassProbs.push_back(predClassProbs);
@@ -416,7 +632,7 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
       
       DataFrame predClassProbs;
       
-      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
+      trees.push_back(transformTreeIntoDF(prunedTree, predClassProbs));
       treeWeights.push_back(treeWt);
       
       leafNodeClassProbs.push_back(predClassProbs);
