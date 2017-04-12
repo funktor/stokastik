@@ -36,12 +36,6 @@ struct Node {
   
   Node* left;
   Node* right;
-  
-  bool operator==(const Node* x){
-    return this->bestSplit.featureDecisionVal == x->bestSplit.featureDecisionVal 
-    && this->bestSplit.featureIndex == x->bestSplit.featureIndex 
-    && this->rows.size() == x->rows.size() && this->depth == x->depth;
-  }
 };
 
 struct InputMetaData {
@@ -66,7 +60,7 @@ Node* copyNode(Node* a) {
     b->numLeavesBranch = a->numLeavesBranch;
     b->resubErrorBranch =  a->resubErrorBranch;
     b->rows =  a->rows;
-
+    
     b->left = copyNode(a->left);
     b->right = copyNode(a->right);
   }
@@ -121,7 +115,7 @@ Node* getLeafNode(const std::set<int> &rows, InputMetaData &metaData) {
   Node *node = new Node();
   
   node->bestSplit = {-1, -1, std::set<int>(), std::set<int>()};
-
+  
   node->classProbs = computeClassProbs(rows, metaData);
   
   node->rows = rows;
@@ -159,7 +153,13 @@ Node* createNode(const std::set<int> &currRows,
       for (auto q = cols.begin(); q != cols.end(); ++q) thisColValsMap[*q].insert(metaData.rowColValMap[*p][*q]);
     }
     
-    for (auto p = thisCols.begin(); p != thisCols.end(); ++p) {
+    std::vector<int> colsVec(thisCols.begin(), thisCols.end());
+    
+    std::random_shuffle(colsVec.begin(), colsVec.end());
+    
+    std::set<int> thisColsSampled(colsVec.begin(), colsVec.begin()+0.1*colsVec.size());
+    
+    for (auto p = thisColsSampled.begin(); p != thisColsSampled.end(); ++p) {
       
       int feature = *p;
       
@@ -348,82 +348,82 @@ Int_Double treePredict(Node* node, Int_Double &colValMap) {
 
 double resubstitutionErrorNode(Node* node, 
                                InputMetaData &metaData, int totalRows) {
-
+  
   Int_Double classProbs = computeClassProbs(node->rows, metaData);
   std::pair<int, double> best = bestClass(classProbs);
-
+  
   return (1-best.second)*(double)node->rows.size()/(double)totalRows;
 }
 
 Node* resubstitutionErrorBranches(Node* node, InputMetaData &metaData, int totalRows) {
-
+  
   if (node->left == NULL) node->resubErrorBranch = resubstitutionErrorNode(node, metaData, totalRows);
-
+  
   else {
     Node* n1 = resubstitutionErrorBranches(node->left, metaData, totalRows);
     Node* n2 = resubstitutionErrorBranches(node->right, metaData, totalRows);
-
+    
     node->resubErrorBranch = n1->resubErrorBranch + n2->resubErrorBranch;
   }
-
+  
   return node;
 }
 
 Node* nodeNumLeaves(Node* node) {
-
+  
   if (node->left == NULL) node->numLeavesBranch = 1;
   else node->numLeavesBranch = nodeNumLeaves(node->left)->numLeavesBranch + nodeNumLeaves(node->right)->numLeavesBranch;
-
+  
   return node;
 }
 
 std::pair<Node*, double> getMinComplexityNodes(Node* node, InputMetaData &metaData) {
-
+  
   Node* n = node;
   std::queue<Node*> nodeQ;
-
+  
   nodeQ.push(n);
-
+  
   int totalRows = node->rows.size();
   
   double minComplexity = std::numeric_limits<double>::max();
   Node* minComplexityNode = new Node();
-
+  
   while(!nodeQ.empty()) {
     Node* n = nodeQ.front();
     nodeQ.pop();
-
+    
     double a = resubstitutionErrorNode(n, metaData, totalRows);
     double b = n->resubErrorBranch;
     int c = n->numLeavesBranch;
-
+    
     double g = (a-b)/((double)c-1);
     
     if (g < minComplexity || (g == minComplexity && n->depth < minComplexityNode->depth)) {
       minComplexity = g;
       minComplexityNode = n;
     }
-
+    
     if (n->left != NULL && n->left->left != NULL) nodeQ.push(n->left);
     if (n->right != NULL && n->right->left != NULL) nodeQ.push(n->right);
   }
-
+  
   return std::make_pair(minComplexityNode, minComplexity);
 }
 
-Node* pruneNode(Node* root, Node* &node, InputMetaData &metaData) {
-  if (root->left == NULL) return root;
-  else if (root == node) {
-    Node* a = getLeafNode(root->rows, metaData);
-    a->depth = 1;
-    return a;
-  }
+Node* pruneNode(Node* root, Node* node, InputMetaData &metaData) {
+  if (node == NULL || root->left == NULL) return root;
+  
+  else if (root->bestSplit.featureIndex == node->bestSplit.featureIndex && 
+           root->bestSplit.featureDecisionVal == node->bestSplit.featureDecisionVal && 
+           root->rows.size() == node->rows.size() && 
+           root->depth == node->depth) return getLeafNode(root->rows, metaData);
   else {
     root->left = pruneNode(root->left, node, metaData);
     root->right = pruneNode(root->right, node, metaData);
-  }
-  
-  return root;
+    
+    return root;
+  }        
 }
 
 std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMetaData &metaData) {
@@ -432,46 +432,47 @@ std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMe
   root = resubstitutionErrorBranches(root, metaData, root->rows.size());
   root = nodeNumLeaves(root);
   
-  output.push_back(std::make_pair(root, 0));
+  output.push_back(std::make_pair((Node*)NULL, 0));
   
   while(root->left != NULL) {
     std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
-
-    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
     
-    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
-    prunedNode = nodeNumLeaves(prunedNode);
+    root = pruneNode(root, minComplexityNodes.first, metaData);
     
-    output.push_back(std::make_pair(prunedNode, minComplexityNodes.second));
-    root = copyNode(prunedNode);
+    root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+    root = nodeNumLeaves(root);
+    
+    output.push_back(std::make_pair(minComplexityNodes.first, minComplexityNodes.second));
   }
   
   return output;
 }
 
-std::unordered_map<int, Node*> complexityPruneTreeSeqWithComplexities(Node* root, InputMetaData &metaData, 
-                                                                      const std::vector<double> &complexities) {
+std::vector<std::pair<Node*, int>> complexityPruneTreeSeqWithComplexities(Node* root, InputMetaData &metaData, 
+                                                                          const std::vector<double> &complexities) {
   
-  std::unordered_map<int, Node*> output;
+  std::vector<std::pair<Node*, int>> output;
   
   root = resubstitutionErrorBranches(root, metaData, root->rows.size());
   root = nodeNumLeaves(root);
   
-  output[0] = root;
+  output.push_back(std::make_pair((Node*)NULL, 0));
   
-  int i = 1;
+  int i = 0;
   
   while(root->left != NULL) {
     std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
     
-    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
+    root = pruneNode(root, minComplexityNodes.first, metaData);
     
-    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
-    prunedNode = nodeNumLeaves(prunedNode);
+    root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+    root = nodeNumLeaves(root);
     
-    if (complexities.size() > i && complexities[i] < minComplexityNodes.second) output[i++] = prunedNode;
-    
-    root = copyNode(prunedNode);
+    if (minComplexityNodes.second < complexities[i]) output.push_back(std::make_pair(minComplexityNodes.first, -1));
+    else {
+      while (i <= complexities.size()-1 && minComplexityNodes.second >= complexities[i]) i++;
+      output.push_back(std::make_pair(minComplexityNodes.first, i));
+    }
   }
   
   return output;
@@ -482,7 +483,9 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
   std::vector<double> updatedComplexities;
   std::vector<std::pair<Node*, double>> treeSeq = complexityPruneTreeSeq(copyNode(node), metaData);
   
-  for (int i = 0; i < treeSeq.size()-1; i++) updatedComplexities.push_back(treeSeq[i].second*treeSeq[i+1].second);
+  for (int i = 0; i < treeSeq.size()-1; i++) updatedComplexities.push_back(sqrt(treeSeq[i].second*treeSeq[i+1].second));
+  
+  updatedComplexities.push_back(std::numeric_limits<double>::max());
   
   std::set<int> allRows = node->rows;
   
@@ -507,25 +510,29 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
     
     Node* tree = constructTree(trainRows, metaData, giniImpurity, maxDepth);
     
-    std::unordered_map<int, Node*> subTreeSeq = complexityPruneTreeSeqWithComplexities(copyNode(tree), metaData, updatedComplexities);
+    std::vector<std::pair<Node*, int>> subTreeSeq = complexityPruneTreeSeqWithComplexities(copyNode(tree), metaData, updatedComplexities);
     
-    for (auto p = subTreeSeq.begin(); p != subTreeSeq.end(); ++p) {
-      Node* n = p->second;
+    for (int j = 0; j < subTreeSeq.size(); j++) {
+      Node* nodeToPrune = subTreeSeq[j].first;
       
-      double error = 0;
+      tree = pruneNode(tree, nodeToPrune, metaData);
       
-      for (auto q = validationRows.begin(); q != validationRows.end(); ++q) {
-        Int_Double colValMap = metaData.rowColValMap[*q];
-        Int_Double predClasses = treePredict(n, colValMap);
+      if (subTreeSeq[j].second != -1) {
+        double error = 0;
         
-        std::pair<int, double> out = bestClass(predClasses);
+        for (auto q = validationRows.begin(); q != validationRows.end(); ++q) {
+          Int_Double colValMap = metaData.rowColValMap[*q];
+          Int_Double predClasses = treePredict(tree, colValMap);
+          
+          std::pair<int, double> out = bestClass(predClasses);
+          
+          if (out.first != metaData.rowClassMap[*q]) error++;
+        }
         
-        if (out.first != metaData.rowClassMap[*q]) error++;
+        error = (double)error/(double)validationRows.size();
+        
+        complexityErrorMap[subTreeSeq[j].second] += error;
       }
-      
-      error = (double)error/(double)validationRows.size();
-      
-      complexityErrorMap[p->first] += error;
     }
   }
   
@@ -538,8 +545,10 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
       complexityIndex = p->first;
     }
   }
-
-  return treeSeq[complexityIndex].first;
+  
+  for (int i = 0; i <= complexityIndex; i++) node = pruneNode(node, treeSeq[i].first, metaData);
+  
+  return node;
 }
 
 void foldColValRowsMap(const std::set<int> &featureSet, InputMetaData &metaData) {

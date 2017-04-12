@@ -36,12 +36,6 @@ struct Node {
   
   Node* left;
   Node* right;
-  
-  bool operator==(const Node* x){
-    return this->bestSplit.featureDecisionVal == x->bestSplit.featureDecisionVal 
-    && this->bestSplit.featureIndex == x->bestSplit.featureIndex 
-    && this->rows.size() == x->rows.size() && this->depth == x->depth;
-  }
 };
 
 struct InputMetaData {
@@ -417,19 +411,18 @@ std::pair<Node*, double> getMinComplexityNodes(Node* node, InputMetaData &metaDa
   return std::make_pair(minComplexityNode, minComplexity);
 }
 
-Node* pruneNode(Node* root, Node* &node, InputMetaData &metaData) {
-  if (root->left == NULL) return root;
-  else if (root == node) {
-    Node* a = getLeafNode(root->rows, metaData);
-    a->depth = 1;
-    return a;
-  }
+Node* pruneNode(Node* root, Node* node, InputMetaData &metaData) {
+  if (node == NULL || root->left == NULL) return root;
+  else if (root->bestSplit.featureIndex == node->bestSplit.featureIndex 
+             && root->bestSplit.featureDecisionVal == node->bestSplit.featureDecisionVal 
+             && root->rows.size() == node->rows.size() 
+             && root->depth == node->depth) return getLeafNode(root->rows, metaData);
   else {
     root->left = pruneNode(root->left, node, metaData);
     root->right = pruneNode(root->right, node, metaData);
+    
+    return root;
   }
-  
-  return root;
 }
 
 std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMetaData &metaData) {
@@ -438,46 +431,47 @@ std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMe
   root = resubstitutionErrorBranches(root, metaData, root->rows.size());
   root = nodeNumLeaves(root);
   
-  output.push_back(std::make_pair(root, 0));
+  output.push_back(std::make_pair((Node*)NULL, 0));
   
   while(root->left != NULL) {
     std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
     
-    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
+    root = pruneNode(root, minComplexityNodes.first, metaData);
     
-    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
-    prunedNode = nodeNumLeaves(prunedNode);
+    root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+    root = nodeNumLeaves(root);
     
-    output.push_back(std::make_pair(prunedNode, minComplexityNodes.second));
-    root = copyNode(prunedNode);
+    output.push_back(std::make_pair(minComplexityNodes.first, minComplexityNodes.second));
   }
   
   return output;
 }
 
-std::unordered_map<int, Node*> complexityPruneTreeSeqWithComplexities(Node* root, InputMetaData &metaData, 
-                                                                      const std::vector<double> &complexities) {
+std::vector<std::pair<Node*, int>> complexityPruneTreeSeqWithComplexities(Node* root, InputMetaData &metaData, 
+                                                                          const std::vector<double> &complexities) {
   
-  std::unordered_map<int, Node*> output;
+  std::vector<std::pair<Node*, int>> output;
   
   root = resubstitutionErrorBranches(root, metaData, root->rows.size());
   root = nodeNumLeaves(root);
   
-  output[0] = root;
+  output.push_back(std::make_pair((Node*)NULL, 0));
   
-  int i = 1;
+  int i = 0;
   
   while(root->left != NULL) {
     std::pair<Node*, double> minComplexityNodes = getMinComplexityNodes(root, metaData);
     
-    Node* prunedNode = pruneNode(root, minComplexityNodes.first, metaData);
+    root = pruneNode(root, minComplexityNodes.first, metaData);
     
-    prunedNode = resubstitutionErrorBranches(prunedNode, metaData, prunedNode->rows.size());
-    prunedNode = nodeNumLeaves(prunedNode);
+    root = resubstitutionErrorBranches(root, metaData, root->rows.size());
+    root = nodeNumLeaves(root);
     
-    if (complexities.size() > i && complexities[i] < minComplexityNodes.second) output[i++] = prunedNode;
-    
-    root = copyNode(prunedNode);
+    if (minComplexityNodes.second < complexities[i]) output.push_back(std::make_pair(minComplexityNodes.first, -1));
+    else {
+      while (i <= complexities.size()-1 && minComplexityNodes.second >= complexities[i]) i++;
+      output.push_back(std::make_pair(minComplexityNodes.first, i));
+    }
   }
   
   return output;
@@ -488,7 +482,9 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
   std::vector<double> updatedComplexities;
   std::vector<std::pair<Node*, double>> treeSeq = complexityPruneTreeSeq(copyNode(node), metaData);
   
-  for (int i = 0; i < treeSeq.size()-1; i++) updatedComplexities.push_back(treeSeq[i].second*treeSeq[i+1].second);
+  for (int i = 0; i < treeSeq.size()-1; i++) updatedComplexities.push_back(sqrt(treeSeq[i].second*treeSeq[i+1].second));
+  
+  updatedComplexities.push_back(std::numeric_limits<double>::max());
   
   std::set<int> allRows = node->rows;
   
@@ -513,25 +509,29 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
     
     Node* tree = constructTree(trainRows, metaData, giniImpurity, maxDepth);
     
-    std::unordered_map<int, Node*> subTreeSeq = complexityPruneTreeSeqWithComplexities(copyNode(tree), metaData, updatedComplexities);
+    std::vector<std::pair<Node*, int>> subTreeSeq = complexityPruneTreeSeqWithComplexities(copyNode(tree), metaData, updatedComplexities);
     
-    for (auto p = subTreeSeq.begin(); p != subTreeSeq.end(); ++p) {
-      Node* n = p->second;
+    for (int j = 0; j < subTreeSeq.size(); j++) {
+      Node* nodeToPrune = subTreeSeq[j].first;
       
-      double error = 0;
+      tree = pruneNode(tree, nodeToPrune, metaData);
       
-      for (auto q = validationRows.begin(); q != validationRows.end(); ++q) {
-        Int_Double colValMap = metaData.rowColValMap[*q];
-        Int_Double predClasses = treePredict(n, colValMap);
+      if (subTreeSeq[j].second != -1) {
+        double error = 0;
         
-        std::pair<int, double> out = bestClass(predClasses);
+        for (auto q = validationRows.begin(); q != validationRows.end(); ++q) {
+          Int_Double colValMap = metaData.rowColValMap[*q];
+          Int_Double predClasses = treePredict(tree, colValMap);
+          
+          std::pair<int, double> out = bestClass(predClasses);
+          
+          if (out.first != metaData.rowClassMap[*q]) error++;
+        }
         
-        if (out.first != metaData.rowClassMap[*q]) error++;
+        error = (double)error/(double)validationRows.size();
+        
+        complexityErrorMap[subTreeSeq[j].second] += error;
       }
-      
-      error = (double)error/(double)validationRows.size();
-      
-      complexityErrorMap[p->first] += error;
     }
   }
   
@@ -545,7 +545,9 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
     }
   }
   
-  return treeSeq[complexityIndex].first;
+  for (int i = 0; i <= complexityIndex; i++) node = pruneNode(node, treeSeq[i].first, metaData);
+  
+  return node;
 }
 
 void foldColValRowsMap(const std::set<int> &featureSet, InputMetaData &metaData) {
@@ -595,63 +597,63 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
   foldColValRowsMap(uniqueCols, metaData);
   
   int iterNum = 1;
-  
+
   while(iterNum <= boostingRounds) {
-    
+
     Node* tree = constructTree(uniqueRows, metaData, giniImpurity, maxDepth);
-    
-    Node* prunedTree = costComplexityPrune(tree, metaData, cvRounds, maxDepth);
-    
+
+    tree = costComplexityPrune(tree, metaData, cvRounds, maxDepth);
+
     double err = 0;
-    
+
     std::set<int> errorRows;
-    
+
     for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
-      std::unordered_map<int, double> predClassProbs = treePredict(prunedTree, metaData.rowColValMap[*p]);
+      std::unordered_map<int, double> predClassProbs = treePredict(tree, metaData.rowColValMap[*p]);
       std::pair<int, double> best = bestClass(predClassProbs);
-      
+
       if (best.first != metaData.rowClassMap[*p]) {
         errorRows.insert(*p);
         err += metaData.instanceWeights[*p];
       }
     }
-    
+
     double treeWt;
-    
+
     if (err > 0.5 || err <= 0) {
       DataFrame predClassProbs;
-      
-      trees.push_back(transformTreeIntoDF(prunedTree, predClassProbs));
+
+      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
       treeWeights.push_back(1.0);
-      
+
       leafNodeClassProbs.push_back(predClassProbs);
       break;
     }
     else {
       treeWt = log((1-err)/err)+log(uniqueLabels.size()-1);
-      
+
       DataFrame predClassProbs;
-      
-      trees.push_back(transformTreeIntoDF(prunedTree, predClassProbs));
+
+      trees.push_back(transformTreeIntoDF(tree, predClassProbs));
       treeWeights.push_back(treeWt);
-      
+
       leafNodeClassProbs.push_back(predClassProbs);
-      
+
       double sumWeights = 0;
-      
+
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
         if (errorRows.find(*p) != errorRows.end()) metaData.instanceWeights[*p] *= exp(treeWt);
         sumWeights += metaData.instanceWeights[*p];
       }
-      
+
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p] /= sumWeights;
-      
+
       iterNum++;
     }
   }
-  
+
   double sumTreeWeights = 0;
-  
+
   for (size_t i = 0; i < treeWeights.size(); i++) sumTreeWeights += treeWeights[i];
   for (size_t i = 0; i < treeWeights.size(); i++) treeWeights[i] /= sumTreeWeights;
   
