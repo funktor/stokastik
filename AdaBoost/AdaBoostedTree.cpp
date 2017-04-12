@@ -413,10 +413,11 @@ std::pair<Node*, double> getMinComplexityNodes(Node* node, InputMetaData &metaDa
 
 Node* pruneNode(Node* root, Node* node, InputMetaData &metaData) {
   if (node == NULL || root->left == NULL) return root;
-  else if (root->bestSplit.featureIndex == node->bestSplit.featureIndex 
-             && root->bestSplit.featureDecisionVal == node->bestSplit.featureDecisionVal 
-             && root->rows.size() == node->rows.size() 
-             && root->depth == node->depth) return getLeafNode(root->rows, metaData);
+  
+  else if (root->bestSplit.featureIndex == node->bestSplit.featureIndex && 
+           root->bestSplit.featureDecisionVal == node->bestSplit.featureDecisionVal) 
+    return getLeafNode(root->rows, metaData);
+  
   else {
     root->left = pruneNode(root->left, node, metaData);
     root->right = pruneNode(root->right, node, metaData);
