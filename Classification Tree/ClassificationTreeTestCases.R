@@ -1,6 +1,5 @@
 library("mlbench")
 library("slam")
-#Rcpp::sourceCpp('ClassificationTree.cpp')
 
 data(Sonar)
 
@@ -18,12 +17,12 @@ test.dtm <- dtm[test.idx,]
 
 test.tree <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  models <- cpp__tree(df.train, class.labels[train.idx], cvRounds = 2)
+  models <- cpp__tree(df.train, class.labels[train.idx], cvRounds = 1)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
   preds <- cpp__test(df.test, models)
   
-  preds <- unlist(lapply(preds, function(x) as.integer(names(which(x == max(x))))))
+  preds <- unlist(lapply(preds, function(x) as.integer(names(which(x == max(x)))[1])))
   mean(preds == class.labels[test.idx][as.integer(names(preds))])
 }
 
@@ -32,7 +31,7 @@ replicate(10, test.tree(train.dtm, test.dtm, train.idx, test.idx, class.labels))
 
 test.adaboost <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 5, maxDepth = 500, cvRounds = 2)
+  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 5, maxDepth = 4, cvRounds = 1)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
   preds <- cpp__test(df.test, models)

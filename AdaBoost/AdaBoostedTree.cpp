@@ -9,12 +9,11 @@ using namespace Rcpp;
 typedef std::unordered_map<int, std::unordered_map<double, std::set<int>>> Int_Double_SetInt;
 typedef std::unordered_map<int, std::set<double>> Int_SetDouble;
 typedef std::unordered_map<int, std::set<int>> Int_SetInt;
+typedef std::unordered_map<int, std::vector<int>> Int_VecInt;
 typedef std::unordered_map<int, std::unordered_map<int, double>> Int_Int_Double;
 typedef std::unordered_map<int, double> Int_Double;
 typedef std::unordered_map<int, int> Int_Int;
-typedef std::unordered_map<int, std::unordered_map<double, double>> Int_Double_Double;
-typedef std::unordered_map<double, std::set<int>> Double_SetInt;
-typedef std::unordered_map<double, double> Double_Double;
+typedef std::unordered_map<int, std::vector<std::pair<int, double>>> Int_VecPairIntDouble;
 
 struct Split {
   int featureIndex;
@@ -39,12 +38,13 @@ struct Node {
 };
 
 struct InputMetaData {
-  Int_Double_SetInt colValAllRowsMap;
-  Int_SetDouble colSortedVals;
   Int_SetInt rowCols;
   Int_Int_Double rowColValMap;
   Int_Double instanceWeights;
   Int_Int rowClassMap;
+  Int_SetInt colSparseRows;
+  Int_Int_Double rowClassCounts;
+  Int_VecInt colSortedRows;
   
   std::set<int> classLabels;
 };
@@ -68,7 +68,17 @@ Node* copyNode(Node* a) {
   return b;
 }
 
-Int_Double computeClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
+Int_Double classCountsForRows(const std::set<int> &rows, InputMetaData &metaData) {
+  Int_Double clCounts;
+  
+  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) clCounts[*p] = 0;
+  
+  for (auto p = rows.begin(); p != rows.end(); ++p) clCounts[metaData.rowClassMap[*p]]++;
+  
+  return clCounts;
+}
+
+Int_Double computeLeafClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
   
   Int_Double classProbs;
   
@@ -82,9 +92,31 @@ Int_Double computeClassProbs(const std::set<int> &rows, InputMetaData &metaData)
   return classProbs;
 }
 
-double giniImpurity(const std::set<int> &rows, InputMetaData &metaData) {
+double classCountSum(Int_Double &clCounts) {
+  double sum = std::accumulate(clCounts.begin(), clCounts.end(), 0.0, 
+                               [](double sum, const std::pair<int, double> &a){return sum + a.second;});
   
-  Int_Double classProbs = computeClassProbs(rows, metaData);
+  return sum;
+}
+
+Int_Double computeClassProbs(const std::set<int> &rows, InputMetaData &metaData) {
+  
+  Int_Double classCounts = classCountsForRows(rows, metaData);
+  
+  double numRows = classCountSum(classCounts);
+  
+  for (auto p = classCounts.begin(); p != classCounts.end(); ++p) classCounts[p->first] = (p->second)/(double)numRows;
+  
+  return classCounts;
+}
+
+double giniImpurity(Int_Double &classCounts) {
+  
+  Int_Double classProbs;
+  
+  double numRows = classCountSum(classCounts);
+  
+  for (auto p = classCounts.begin(); p != classCounts.end(); ++p) classProbs[p->first] = (p->second)/(double)numRows;
   
   double impurity = std::accumulate(classProbs.begin(), classProbs.end(), 0.0, 
                                     [](double impurity, const std::pair<int, double> &a){return impurity + a.second*(1-a.second);});
@@ -92,9 +124,13 @@ double giniImpurity(const std::set<int> &rows, InputMetaData &metaData) {
   return impurity;
 }
 
-double entropy(const std::set<int> &rows, InputMetaData &metaData) {
+double entropy(Int_Double &classCounts) {
   
-  Int_Double classProbs = computeClassProbs(rows, metaData);
+  Int_Double classProbs;
+  
+  double numRows = classCountSum(classCounts);
+  
+  for (auto p = classCounts.begin(); p != classCounts.end(); ++p) classProbs[p->first] = (p->second)/(double)numRows;
   
   double impurity = std::accumulate(classProbs.begin(), classProbs.end(), 0.0, 
                                     [](double impurity, const std::pair<int, double> &a){return impurity - a.second*log2(a.second);});
@@ -110,13 +146,29 @@ std::pair<int, double> bestClass(Int_Double &classProbs) {
   return *it;
 }
 
+Int_Double addClassCounts(Int_Double &clCounts1, Int_Double &clCounts2, InputMetaData &metaData) {
+  Int_Double clCounts;
+  
+  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) clCounts[*p] = clCounts1[*p] + clCounts2[*p];
+  
+  return clCounts;
+}
+
+Int_Double subClassCounts(Int_Double &clCounts1, Int_Double &clCounts2, InputMetaData &metaData) {
+  Int_Double clCounts;
+  
+  for (auto p = metaData.classLabels.begin(); p != metaData.classLabels.end(); ++p) clCounts[*p] = clCounts1[*p] - clCounts2[*p];
+  
+  return clCounts;
+}
+
 Node* getLeafNode(const std::set<int> &rows, InputMetaData &metaData) {
   
   Node *node = new Node();
   
   node->bestSplit = {-1, -1, std::set<int>(), std::set<int>()};
   
-  node->classProbs = computeClassProbs(rows, metaData);
+  node->classProbs = computeLeafClassProbs(rows, metaData);
   
   node->rows = rows;
   
@@ -127,113 +179,113 @@ Node* getLeafNode(const std::set<int> &rows, InputMetaData &metaData) {
 }
 
 Node* createNode(const std::set<int> &currRows,
-                 InputMetaData &metaData,
-                 double (*costFuntion) (const std::set<int> &, InputMetaData &),
+                 InputMetaData &metaData, double (*costFuntion) (Int_Double &),
                  const bool &maxDepthReached) {
   
   Node *node = new Node();
   
   Int_Double classProbs = computeClassProbs(currRows, metaData);
+  std::pair<int, double> best = bestClass(classProbs);
   
-  if ((int)classProbs.size() == 1 || maxDepthReached) node = getLeafNode(currRows, metaData);
+  if (best.second >= 0.95 || maxDepthReached) node = getLeafNode(currRows, metaData);
   
   else {
     double maxFeatureGain = 0;
     double featureDecisionVal = -1;
     int featureIdx = -1;
     
-    std::set<int> leftRows, rightRows, thisCols;
+    std::set<int> leftRows, rightRows, currCols;
     
-    Int_SetDouble thisColValsMap;
+    for (auto p = currRows.begin(); p != currRows.end(); ++p) currCols.insert(metaData.rowCols[*p].begin(), metaData.rowCols[*p].end());
     
-    for (auto p = currRows.begin(); p != currRows.end(); ++p) {
-      std::set<int> cols = metaData.rowCols[*p];
-      thisCols.insert(cols.begin(), cols.end());
-      
-      for (auto q = cols.begin(); q != cols.end(); ++q) thisColValsMap[*q].insert(metaData.rowColValMap[*p][*q]);
-    }
-    
-    std::vector<int> colsVec(thisCols.begin(), thisCols.end());
-    
-    std::random_shuffle(colsVec.begin(), colsVec.end());
-    
-    std::set<int> thisColsSampled(colsVec.begin(), colsVec.begin()+0.1*colsVec.size());
-    
-    for (auto p = thisColsSampled.begin(); p != thisColsSampled.end(); ++p) {
-      
+    for (auto p = currCols.begin(); p != currCols.end(); ++p) {
       int feature = *p;
       
-      std::set<double> sortedVals = thisColValsMap[feature];
+      std::set<int> sparseRows;
       
-      std::set<int> allRows = metaData.colValAllRowsMap[feature][*sortedVals.rbegin()];
+      std::set_intersection(currRows.begin(), currRows.end(), 
+                            metaData.colSparseRows[feature].begin(), metaData.colSparseRows[feature].end(),
+                            std::inserter(sparseRows, sparseRows.end()));
       
-      std::set<int> thisRows, sparseRows;
+      Int_Double currRowsClassCounts = classCountsForRows(currRows, metaData);
+      Int_Double sparseRowsClassCounts = classCountsForRows(sparseRows, metaData);
       
-      std::set_intersection(currRows.begin(), currRows.end(), allRows.begin(), allRows.end(),
-                            std::inserter(thisRows, thisRows.end()));
+      double totalImpurity = costFuntion(currRowsClassCounts);
       
-      std::set_difference(currRows.begin(), currRows.end(), thisRows.begin(), thisRows.end(),
-                          std::inserter(sparseRows, sparseRows.end()));
+      std::vector<int> allSortedRows = metaData.colSortedRows[feature];
+      std::vector<int> currSortedRows;
       
-      if (sparseRows.size() > 0) sortedVals.insert(0);
+      for (size_t i = 0; i < allSortedRows.size(); i++) if (currRows.find(allSortedRows[i]) != currRows.end()) currSortedRows.push_back(allSortedRows[i]);
       
       double maxGain = 0;
       double decisionVal = -1;
       
-      std::set<int> bestLeftCostRows, bestRightCostRows;
+      double maxVal = std::numeric_limits<double>::min();
       
-      for (auto q = sortedVals.begin(); q != sortedVals.end(); ++q) {
+      std::vector<int> runningRows, bestLeftRows;
+      
+      Int_Double lastLeftClassCounts;
+      
+      int start = (sparseRows.size() > 0) ? -1 : 0;
+      int i = start;
+      
+      while(i < (int)currSortedRows.size()) {
         
-        std::set<int> leftCostRows, rightCostRows;
+        Int_Double ltClassCounts, rtClassCounts;
+        double currVal;
         
-        if (*q > 0) {
-          std::set<int> leftR = metaData.colValAllRowsMap[feature][*q];
-          
-          std::set_intersection(currRows.begin(), currRows.end(), leftR.begin(), leftR.end(),
-                                std::inserter(leftCostRows, leftCostRows.end()));
+        if (i == -1) {
+          ltClassCounts = sparseRowsClassCounts;
+          runningRows.insert(runningRows.end(), sparseRows.begin(), sparseRows.end());
+          currVal = 0.0;
+        } 
+        else {
+          ltClassCounts = addClassCounts(lastLeftClassCounts, metaData.rowClassCounts[currSortedRows[i]], metaData);
+          runningRows.push_back(currSortedRows[i]);
+          currVal = metaData.rowColValMap[currSortedRows[i]][feature];
         }
         
-        leftCostRows.insert(sparseRows.begin(), sparseRows.end());
+        rtClassCounts = subClassCounts(currRowsClassCounts, ltClassCounts, metaData);
         
-        double leftCost = costFuntion(leftCostRows, metaData);
+        int leftNumRows = (int)runningRows.size();
+        int rightNumRows = (int)currRows.size()-leftNumRows;
         
-        std::set_difference(currRows.begin(), currRows.end(), leftCostRows.begin(), leftCostRows.end(), 
-                            std::inserter(rightCostRows, rightCostRows.end()));
+        double leftCost = costFuntion(ltClassCounts);
+        double rightCost = costFuntion(rtClassCounts);
         
-        double rightCost = costFuntion(rightCostRows, metaData);
-        
-        double w1 = (double)leftCostRows.size()/(double)currRows.size();
-        double w2 = (double)rightCostRows.size()/(double)currRows.size();
-        
-        double totalImpurity=costFuntion(currRows, metaData);
+        double w1 = (double)leftNumRows/(double)currRows.size();
+        double w2 = (double)rightNumRows/(double)currRows.size();
         
         double gain = totalImpurity-(w1*leftCost+w2*rightCost);
         
         if (gain > maxGain) {
           maxGain = gain;
-          decisionVal = *q;
-          bestLeftCostRows = leftCostRows;
-          bestRightCostRows = rightCostRows;
+          decisionVal = currVal;
+          bestLeftRows = runningRows;
         }
+        
+        lastLeftClassCounts = ltClassCounts;
+        
+        if (maxVal < currVal) maxVal = currVal;
+        i++;
       }
       
-      if (maxGain > maxFeatureGain && decisionVal < *sortedVals.rbegin()) {
+      if (maxGain > maxFeatureGain && decisionVal < maxVal) {
         maxFeatureGain = maxGain;
         featureDecisionVal = decisionVal;
         featureIdx = feature;
-        leftRows = bestLeftCostRows;
-        rightRows = bestRightCostRows;
+        
+        std::set<int> l(bestLeftRows.begin(), bestLeftRows.end());
+        leftRows = l;
       }
     }
     
     if (featureIdx != -1) {
       
-      std::set<double> sortedVals = thisColValsMap[featureIdx];
+      std::set_difference(currRows.begin(), currRows.end(), leftRows.begin(), leftRows.end(),
+                          std::inserter(rightRows, rightRows.end()));
       
       node->bestSplit = {featureIdx, featureDecisionVal, leftRows, rightRows};
-      
-      node->bestSplit.featureIndex = featureIdx;
-      node->bestSplit.featureDecisionVal = featureDecisionVal;
       
       node->rows = currRows;
       
@@ -248,7 +300,7 @@ Node* createNode(const std::set<int> &currRows,
 
 Node* constructTree(const std::set<int> &rows,
                     InputMetaData &metaData, 
-                    double (*costFuntion) (const std::set<int> &, InputMetaData &),
+                    double (*costFuntion) (Int_Double &),
                     const int &maxDepth) {
   
   std::queue<Node*> nodeQ;
@@ -341,7 +393,9 @@ Int_Double treePredict(Node* node, Int_Double &colValMap) {
     int decisionFeature = node->bestSplit.featureIndex;
     double decisionVal = node->bestSplit.featureDecisionVal;
     
-    if (colValMap[decisionFeature] <= decisionVal) return treePredict(node->left, colValMap);
+    if ((colValMap.find(decisionFeature) ==  colValMap.end()) 
+          || colValMap[decisionFeature] <= decisionVal) return treePredict(node->left, colValMap);
+    
     else return treePredict(node->right, colValMap);
   }
 }
@@ -349,7 +403,7 @@ Int_Double treePredict(Node* node, Int_Double &colValMap) {
 double resubstitutionErrorNode(Node* node, 
                                InputMetaData &metaData, int totalRows) {
   
-  Int_Double classProbs = computeClassProbs(node->rows, metaData);
+  Int_Double classProbs = node->classProbs;
   std::pair<int, double> best = bestClass(classProbs);
   
   return (1-best.second)*(double)node->rows.size()/(double)totalRows;
@@ -423,7 +477,7 @@ Node* pruneNode(Node* root, Node* node, InputMetaData &metaData) {
     root->right = pruneNode(root->right, node, metaData);
     
     return root;
-  }
+  }        
 }
 
 std::vector<std::pair<Node*, double>> complexityPruneTreeSeq(Node* root, InputMetaData &metaData) {
@@ -550,20 +604,6 @@ Node* costComplexityPrune(Node* node, InputMetaData &metaData, const int &numFol
   
   return node;
 }
-
-void foldColValRowsMap(const std::set<int> &featureSet, InputMetaData &metaData) {
-  
-  for (auto p = featureSet.begin(); p != featureSet.end(); ++p) {
-    
-    std::set<double> sortedVals = metaData.colSortedVals[*p];
-    std::vector<double> sortedValsVec(sortedVals.begin(), sortedVals.end());
-    
-    for (size_t i = 1; i < sortedValsVec.size(); i++) 
-      metaData.colValAllRowsMap[*p][sortedValsVec[i]].insert(metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].begin(), 
-                                                             metaData.colValAllRowsMap[*p][sortedValsVec[i-1]].end());
-  }
-}
-
 // [[Rcpp::export]]
 List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabels, 
                          int boostingRounds = 5, int maxDepth=100, int cvRounds=5) {
@@ -585,9 +625,14 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
   
   metaData.classLabels = uniqueLabels;
   
-  for (size_t i = 0; i < rows.size(); i++) metaData.colSortedVals[cols[i]].insert(vals[i]);
-  for (size_t i = 0; i < rows.size(); i++) metaData.colValAllRowsMap[cols[i]][vals[i]].insert(rows[i]);
+  Int_SetInt colRows;
+  Int_SetInt colSparseRows;
+  
+  Int_VecPairIntDouble colValRowPairsMap;
+  
+  for (size_t i = 0; i < rows.size(); i++) colValRowPairsMap[cols[i]].push_back(std::make_pair(rows[i], vals[i]));
   for (size_t i = 0; i < rows.size(); i++) metaData.rowCols[rows[i]].insert(cols[i]);
+  for (size_t i = 0; i < rows.size(); i++) colRows[cols[i]].insert(rows[i]);
   
   for (size_t i = 0; i < rows.size(); i++) metaData.rowColValMap[rows[i]][cols[i]] = vals[i];
   
@@ -595,7 +640,33 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
   
   for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p]=1/(double)uniqueRows.size();
   
-  foldColValRowsMap(uniqueCols, metaData);
+  for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
+    for (auto q = uniqueLabels.begin(); q != uniqueLabels.end(); ++q) metaData.rowClassCounts[*p][*q] = 0;
+    metaData.rowClassCounts[*p][metaData.rowClassMap[*p]] = 1;
+  }
+  
+  for (auto p = colValRowPairsMap.begin(); p != colValRowPairsMap.end(); ++p) {
+    std::vector<std::pair<int, double>> valRowsPairs = p->second;
+    
+    std::sort(valRowsPairs.begin(), valRowsPairs.end(), 
+              [](const std::pair<int, double> &a, const std::pair<int, double> &b){return a.second < b.second;});
+    
+    for (size_t i = 0; i < valRowsPairs.size(); i++) metaData.colSortedRows[p->first].push_back(valRowsPairs[i].first);
+  }
+  
+  colValRowPairsMap.clear();
+  
+  for (auto p = colRows.begin(); p != colRows.end(); ++p) {
+    std::set<int> nonSparseRows = p->second;
+    std::set<int> sparseRows;
+    
+    std::set_difference(uniqueRows.begin(), uniqueRows.end(), nonSparseRows.begin(), nonSparseRows.end(),
+                        std::inserter(sparseRows, sparseRows.end()));
+    
+    metaData.colSparseRows[p->first] = sparseRows;
+  }
+  
+  colRows.clear();
   
   int iterNum = 1;
 
@@ -618,37 +689,37 @@ List cpp__adaBoostedTree(DataFrame inputSparseMatrix, std::vector<int> classLabe
         err += metaData.instanceWeights[*p];
       }
     }
-
+    
     double treeWt;
-
+    
     if (err > 0.5 || err <= 0) {
       DataFrame predClassProbs;
-
+      
       trees.push_back(transformTreeIntoDF(tree, predClassProbs));
       treeWeights.push_back(1.0);
-
+      
       leafNodeClassProbs.push_back(predClassProbs);
       break;
     }
     else {
       treeWt = log((1-err)/err)+log(uniqueLabels.size()-1);
-
+      
       DataFrame predClassProbs;
-
+      
       trees.push_back(transformTreeIntoDF(tree, predClassProbs));
       treeWeights.push_back(treeWt);
-
+      
       leafNodeClassProbs.push_back(predClassProbs);
-
+      
       double sumWeights = 0;
-
+      
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) {
         if (errorRows.find(*p) != errorRows.end()) metaData.instanceWeights[*p] *= exp(treeWt);
         sumWeights += metaData.instanceWeights[*p];
       }
-
+      
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) metaData.instanceWeights[*p] /= sumWeights;
-
+      
       iterNum++;
     }
   }
@@ -676,7 +747,9 @@ std::unordered_map<int, double> dfPredict(std::unordered_map<int, NodeDF> &nodeD
   while(true) {
     if (nodeDFMap[index].featureIndex == -1) return predClassProbs[index];
     else {
-      if (colValMap[nodeDFMap[index].featureIndex] <= nodeDFMap[index].decisionVal) index = nodeDFMap[index].leftIndex;
+      if ((colValMap.find(nodeDFMap[index].featureIndex) ==  colValMap.end()) 
+            || colValMap[nodeDFMap[index].featureIndex] <= nodeDFMap[index].decisionVal) index = nodeDFMap[index].leftIndex;
+      
       else index = nodeDFMap[index].rightIndex;
     }
   }
