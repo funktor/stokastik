@@ -31,7 +31,7 @@ replicate(10, test.tree(train.dtm, test.dtm, train.idx, test.idx, class.labels))
 
 test.adaboost <- function(train.dtm, test.dtm, train.idx, test.idx, class.labels) {
   df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
-  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 5, maxDepth = 4, cvRounds = 1)
+  models <- cpp__adaBoostedTree(df.train, class.labels[train.idx], boostingRounds = 1, maxDepth = 20, cvRounds = 1)
   
   df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
   preds <- cpp__test(df.test, models)
