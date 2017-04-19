@@ -39,9 +39,10 @@ dtm <- slam::simple_triplet_matrix(i=dtm$i, j=dtm$j, v=dtm$v, nrow=max(dtm$i), n
                                    dimnames=list("Docs"=as.character(1:max(dtm$i)), "Terms"=dtm$Terms))
 
 
-selected.features <- cpp__mutualInformation(dtm$i, dtm$j, classes = labels, maxFeaturesPerClass = 100)
+selected.features <- cpp__mutualInformation(dtm$i, dtm$j, classes = labels, maxFeaturesPerClass = 50)
 dtm <- dtm[,selected.features]
 
+dtm <- tm::weightBin(dtm)
 dtm <- tm::as.DocumentTermMatrix(dtm, weighting = function(x) tm::weightTfIdf(x, normalize = T))
 
 train1.idx <- c()
@@ -70,7 +71,7 @@ df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
 out <- cpp__nbTest(df.test, models)
 
 preds <- unlist(lapply(out, function(x) as.integer(names(which(x == max(x)))[1])))
-mean(preds == test.labels)
+mean(preds == test.labels[as.integer(names(preds))])
 
 
 train.dtm <- dtm[sort(train1.idx),]
@@ -83,6 +84,6 @@ df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
 out <- cpp__nbTest(df.test, models)
 
 preds <- unlist(lapply(out, function(x) as.integer(names(which(x == max(x)))[1])))
-mean(preds == test.labels)
+mean(preds == test.labels[as.integer(names(preds))])
 
 
