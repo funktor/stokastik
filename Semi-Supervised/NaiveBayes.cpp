@@ -12,29 +12,29 @@ typedef std::unordered_map<int, int> Int_Int;
 
 
 Int_Int_Double computePosteriorProbabilities(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts, 
-                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels,
-                                             const int &numDocs, const int &numFeatures) {
+                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels) {
   
   Int_Int_Double posteriorProbs;
   
   Int_Double classFeatureProbsSum;
-  
-  int numClasses = (int)classLabels.size();
+  double classProbsSum = 0;
   
   for (auto p = priorClassFeatureCounts.begin(); p != priorClassFeatureCounts.end(); ++p) {
     Int_Double x = p->second;
-    for (auto q = x.begin(); q != x.end(); ++q) classFeatureProbsSum[p->first] += q->second;
+    for (auto q = x.begin(); q != x.end(); ++q) classFeatureProbsSum[p->first] += (1+q->second);
   }
+  
+  for (auto p = priorClassCounts.begin(); p != priorClassCounts.end(); ++p) classProbsSum += (1+p->second);
   
   for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
     Int_Double colValMap = p->second;
     
     for (auto q = classLabels.begin(); q != classLabels.end(); ++q) {
       
-      double classProb = (1+priorClassCounts[*q])/((double)numClasses + (double)numDocs);
+      double classProb = (1+priorClassCounts[*q])/classProbsSum;
       posteriorProbs[p->first][*q] += log(classProb);
       
-      double constant = (double)classFeatureProbsSum[*q] + (double)numFeatures;
+      double constant = (double)classFeatureProbsSum[*q];
       
       double featureProb = 0;
       
@@ -69,7 +69,8 @@ Int_Int_Double computePosteriorProbabilities(Int_Int_Double &priorClassFeatureCo
   return posteriorProbs;
 }
 
-Int_Int_Double computePriorClassFeatureCounts(Int_Int_Double &rowClassProbs, Int_Int_Double &rowColValMap) {
+Int_Int_Double computePriorClassFeatureCounts(Int_Int_Double &rowClassProbs, Int_Int_Double &rowColValMap,
+                                              Int_Int &rowClassMap, const double &lambda) {
   
   Int_Int_Double priorCounts;
   
@@ -80,19 +81,28 @@ Int_Int_Double computePriorClassFeatureCounts(Int_Int_Double &rowClassProbs, Int
     Int_Double classProbs = rowClassProbs[row];
     
     for (auto q = classProbs.begin(); q != classProbs.end(); ++q) {
-      for (auto r = colValMap.begin(); r != colValMap.end(); ++r) priorCounts[q->first][r->first] += (r->second)*(q->second);
+      for (auto r = colValMap.begin(); r != colValMap.end(); ++r) {
+        if (rowClassMap[row] == -1) priorCounts[q->first][r->first] += lambda*(r->second)*(q->second);
+        else priorCounts[q->first][r->first] += (r->second)*(q->second);
+      }
     }
   }
   
   return priorCounts;
 }
 
-Int_Double computeClassCounts(Int_Int_Double &rowClassProbs) {
+Int_Double computeClassCounts(Int_Int_Double &rowClassProbs, Int_Int &rowClassMap, 
+                              const double &lambda) {
+  
   Int_Double classPriorCounts;
   
   for (auto p = rowClassProbs.begin(); p != rowClassProbs.end(); ++p) {
     Int_Double classProbs = p->second;
-    for (auto q = classProbs.begin(); q != classProbs.end(); ++q) classPriorCounts[q->first] += (q->second);
+    
+    for (auto q = classProbs.begin(); q != classProbs.end(); ++q) {
+      if (rowClassMap[p->first] == -1) classPriorCounts[q->first] += lambda*(q->second);
+      else classPriorCounts[q->first] += (q->second);
+    }
   }
   
   return classPriorCounts;
@@ -100,7 +110,7 @@ Int_Double computeClassCounts(Int_Int_Double &rowClassProbs) {
 
 // [[Rcpp::export]]
 List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels, 
-             int numDocs, int numFeatures, int maxIter=5) {
+             int numDocs, int numFeatures, double lambda=0.5, int maxIter=5) {
   
   std::vector<int> rows = inputSparseMatrix["i"];
   std::vector<int> cols = inputSparseMatrix["j"];
@@ -127,8 +137,8 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
 
   for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) if (rowClassMap[*p] != -1) rowClassProbs[*p][rowClassMap[*p]] = 1;
 
-  Int_Double priorClassCounts = computeClassCounts(rowClassProbs);
-  Int_Int_Double priorClassFeatureCounts = computePriorClassFeatureCounts(rowClassProbs, rowColValMap);
+  Int_Double priorClassCounts = computeClassCounts(rowClassProbs, rowClassMap, lambda);
+  Int_Int_Double priorClassFeatureCounts = computePriorClassFeatureCounts(rowClassProbs, rowColValMap, rowClassMap, lambda);
 
   if (unlabelledDocsRowColValMap.size() > 0) {
     
@@ -137,12 +147,12 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
     while(counter < maxIter) {
       
       Int_Int_Double unlabelledDocsRowClassProbs = computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, 
-                                                                                 unlabelledDocsRowColValMap, uniqueLabels, numDocs, numFeatures);
+                                                                                 unlabelledDocsRowColValMap, uniqueLabels);
       
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) if (rowClassMap[*p] == -1) rowClassProbs[*p] = unlabelledDocsRowClassProbs[*p];
       
-      priorClassCounts = computeClassCounts(rowClassProbs);
-      priorClassFeatureCounts = computePriorClassFeatureCounts(rowClassProbs, rowColValMap);
+      priorClassCounts = computeClassCounts(rowClassProbs, rowClassMap, lambda);
+      priorClassFeatureCounts = computePriorClassFeatureCounts(rowClassProbs, rowColValMap, rowClassMap, lambda);
       
       counter++;
     }
@@ -173,8 +183,7 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
 }
 
 // [[Rcpp::export]]
-Int_Int_Double cpp__nbTest(DataFrame inputSparseMatrix, List model, 
-                           int numTrainDocs, int numTrainFeatures) {
+Int_Int_Double cpp__nbTest(DataFrame inputSparseMatrix, List model) {
   
   std::vector<int> rows = inputSparseMatrix["i"];
   std::vector<int> cols = inputSparseMatrix["j"];
@@ -201,6 +210,5 @@ Int_Int_Double cpp__nbTest(DataFrame inputSparseMatrix, List model,
   for (size_t i = 0; i < clLabels1.size(); i++) priorClassCounts[clLabels1[i]] = clCounts1[i];
   for (size_t i = 0; i < clLabels2.size(); i++) priorClassFeatureCounts[clLabels2[i]][featureLabels2[i]] = clFeatureCounts2[i];
   
-  return computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, 
-                                       rowColValMap, uniqueLabels, numTrainDocs, numTrainFeatures);
+  return computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, rowColValMap, uniqueLabels);
 }
