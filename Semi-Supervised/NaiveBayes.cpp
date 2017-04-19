@@ -11,9 +11,9 @@ typedef std::unordered_map<int, double> Int_Double;
 typedef std::unordered_map<int, int> Int_Int;
 
 
-Int_Int_Double computePosteriors(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts, 
-                                 Int_Int_Double &rowColValMap, const std::set<int> &classLabels,
-                                 const int &numDocs, const int &numFeatures) {
+Int_Int_Double computePosteriorProbabilities(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts, 
+                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels,
+                                             const int &numDocs, const int &numFeatures) {
   
   Int_Int_Double posteriorProbs;
   
@@ -57,16 +57,6 @@ Int_Int_Double computePosteriors(Int_Int_Double &priorClassFeatureCounts, Int_Do
     for (auto q = x.begin(); q != x.end(); ++q) posteriorProbs[p->first][q->first] = exp((q->second)-maxVal);
   }
   
-  return posteriorProbs;
-}
-
-Int_Int_Double computePosteriorProbabilities(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts, 
-                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels,
-                                             const int &numDocs, const int &numFeatures) {
-  
-  Int_Int_Double posteriorProbs = computePosteriors(priorClassFeatureCounts, priorClassCounts, 
-                                                    rowColValMap, classLabels, numDocs, numFeatures);
-  
   for (auto p = posteriorProbs.begin(); p != posteriorProbs.end(); ++p) {
     Int_Double x = p->second;
 
@@ -108,59 +98,9 @@ Int_Double computeClassCounts(Int_Int_Double &rowClassProbs) {
   return classPriorCounts;
 }
 
-double likelihood(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts,
-                  Int_Int_Double &rowColValMap, const std::set<int> &classLabels, 
-                  const int &numDocs, const int &numFeatures) {
-  
-  Int_Int_Double posteriorProbs;
-  
-  Int_Double classFeatureProbsSum;
-  
-  int numClasses = (int)classLabels.size();
-  
-  for (auto p = priorClassFeatureCounts.begin(); p != priorClassFeatureCounts.end(); ++p) {
-    Int_Double x = p->second;
-    for (auto q = x.begin(); q != x.end(); ++q) classFeatureProbsSum[p->first] += q->second;
-  }
-  
-  double likelh = 0;
-  
-  for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
-    Int_Double colValMap = p->second;
-    
-    for (auto q = classLabels.begin(); q != classLabels.end(); ++q) {
-      
-      double classProb = (1+priorClassCounts[*q])/((double)numClasses + (double)numDocs);
-      posteriorProbs[p->first][*q] += log(classProb);
-      
-      double constant = (double)classFeatureProbsSum[*q] + (double)numFeatures;
-      
-      double featureProb = 0;
-      
-      for (auto r = colValMap.begin(); r != colValMap.end(); ++r) {
-        if (priorClassFeatureCounts[*q].find(r->first) != priorClassFeatureCounts[*q].end()) 
-          featureProb += log(1+priorClassFeatureCounts[*q][r->first])-log(constant);
-        
-        else featureProb -= log(constant);
-      }
-      
-      posteriorProbs[p->first][*q] += featureProb;
-    }
-    
-    Int_Double x = posteriorProbs[p->first];
-    
-    double sum = 0;
-    for (auto q = x.begin(); q != x.end(); ++q) sum += exp(q->second);
-    
-    likelh += log(sum);
-  }
-  
-  return likelh;
-}
-
 // [[Rcpp::export]]
 List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels, 
-             int numDocs, int numFeatures) {
+             int numDocs, int numFeatures, int maxIter=5) {
   
   std::vector<int> rows = inputSparseMatrix["i"];
   std::vector<int> cols = inputSparseMatrix["j"];
@@ -192,10 +132,9 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
 
   if (unlabelledDocsRowColValMap.size() > 0) {
     
-    double lastLikelihood = likelihood(priorClassFeatureCounts, priorClassCounts, 
-                                       rowColValMap, uniqueLabels, numDocs, numFeatures);
+    double counter = 0;
     
-    while(true) {
+    while(counter < maxIter) {
       
       Int_Int_Double unlabelledDocsRowClassProbs = computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, 
                                                                                  unlabelledDocsRowColValMap, uniqueLabels, numDocs, numFeatures);
@@ -205,14 +144,7 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
       priorClassCounts = computeClassCounts(rowClassProbs);
       priorClassFeatureCounts = computePriorClassFeatureCounts(rowClassProbs, rowColValMap);
       
-      double currLikelihood = likelihood(priorClassFeatureCounts, priorClassCounts, 
-                                         rowColValMap, uniqueLabels, numDocs, numFeatures);
-      
-      if (std::abs(currLikelihood - lastLikelihood) < 0.1) break;
-      
-      std::cout << lastLikelihood << " " << currLikelihood << std::endl;
-      
-      lastLikelihood = currLikelihood;
+      counter++;
     }
   }
   
