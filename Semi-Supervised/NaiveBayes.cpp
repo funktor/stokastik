@@ -12,29 +12,29 @@ typedef std::unordered_map<int, int> Int_Int;
 
 
 Int_Int_Double computePosteriorProbabilities(Int_Int_Double &priorClassFeatureCounts, Int_Double &priorClassCounts, 
-                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels) {
+                                             Int_Int_Double &rowColValMap, const std::set<int> &classLabels,
+                                             const double &numDocs, const double &numFeatures) {
   
   Int_Int_Double posteriorProbs;
   
   Int_Double classFeatureProbsSum;
-  double classProbsSum = 0;
+  
+  int numClasses = (int)classLabels.size();
   
   for (auto p = priorClassFeatureCounts.begin(); p != priorClassFeatureCounts.end(); ++p) {
     Int_Double x = p->second;
-    for (auto q = x.begin(); q != x.end(); ++q) classFeatureProbsSum[p->first] += (1+q->second);
+    for (auto q = x.begin(); q != x.end(); ++q) classFeatureProbsSum[p->first] += q->second;
   }
-  
-  for (auto p = priorClassCounts.begin(); p != priorClassCounts.end(); ++p) classProbsSum += (1+p->second);
   
   for (auto p = rowColValMap.begin(); p != rowColValMap.end(); ++p) {
     Int_Double colValMap = p->second;
     
     for (auto q = classLabels.begin(); q != classLabels.end(); ++q) {
       
-      double classProb = (1+priorClassCounts[*q])/classProbsSum;
+      double classProb = (1+priorClassCounts[*q])/((double)numClasses + (double)numDocs);
       posteriorProbs[p->first][*q] += log(classProb);
       
-      double constant = (double)classFeatureProbsSum[*q];
+      double constant = (double)classFeatureProbsSum[*q] + (double)numFeatures;
       
       double featureProb = 0;
       
@@ -147,7 +147,8 @@ List cpp__nb(DataFrame inputSparseMatrix, std::vector<int> classLabels,
     while(counter < maxIter) {
       
       Int_Int_Double unlabelledDocsRowClassProbs = computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, 
-                                                                                 unlabelledDocsRowColValMap, uniqueLabels);
+                                                                                 unlabelledDocsRowColValMap, uniqueLabels,
+                                                                                 (double)numDocs, (double)numFeatures);
       
       for (auto p = uniqueRows.begin(); p != uniqueRows.end(); ++p) if (rowClassMap[*p] == -1) rowClassProbs[*p] = unlabelledDocsRowClassProbs[*p];
       
@@ -207,8 +208,16 @@ Int_Int_Double cpp__nbTest(DataFrame inputSparseMatrix, List model) {
   std::vector<int> featureLabels2 = as<std::vector<int>>(clFeatureCounts["Feature"]);
   std::vector<double> clFeatureCounts2 = as<std::vector<double>>(clFeatureCounts["Count"]);
   
+  std::set<int> featureSet(featureLabels2.begin(), featureLabels2.end());
+  
+  double numDocs = std::accumulate(clCounts1.begin(), clCounts1.end(), 0.0, 
+                                   [](double &sum, const double &cnt){return sum+cnt;});
+  
+  double numFeatures = (double)featureSet.size();
+  
   for (size_t i = 0; i < clLabels1.size(); i++) priorClassCounts[clLabels1[i]] = clCounts1[i];
   for (size_t i = 0; i < clLabels2.size(); i++) priorClassFeatureCounts[clLabels2[i]][featureLabels2[i]] = clFeatureCounts2[i];
   
-  return computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, rowColValMap, uniqueLabels);
+  return computePosteriorProbabilities(priorClassFeatureCounts, priorClassCounts, rowColValMap, uniqueLabels, 
+                                       numDocs, numFeatures);
 }
