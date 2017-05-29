@@ -1,6 +1,6 @@
 source("../Newsgroup.R")
 
-vectors <- cpp__generateWordVectors(contents, tm::stopwords("en"), contextSize = 5, negativeSamplesSize = 5, learningRate = 0.01)
+vectors <- cpp__generateWordVectors(contents[1], tm::stopwords("en"), contextSize = 5, negativeSamplesSize = 5, learningRate = 0.01)
 
 similarity <- function(word1, word2, vectors) {
   u <- vectors$InputVectors[[as.character(vectors$Words[word1])]]
@@ -11,5 +11,5 @@ similarity <- function(word1, word2, vectors) {
   abs(sum(u*v))/(sumsq(u)*sumsq(v))
 }
 
-similarity("computer", "graphics")
-similarity("atheist", "religion")
+similarity("computer", "graphics", vectors)
+similarity("atheist", "religion", vectors)

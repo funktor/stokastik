@@ -109,7 +109,7 @@ std::vector<std::vector<std::vector<std::string>>> tokenize(const std::vector<st
 
 struct TrainInstance {
   int givenWordIndex;
-  std::vector<int> contextWordsIndices;
+  std::set<int> contextWordsIndices;
 };
 
 std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<std::vector<std::vector<std::string>>> &tokenizedWords, 
@@ -144,10 +144,10 @@ std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<s
           }
           else rightIndices.pop_front();
           
-          std::vector<int> contextIndices;
+          std::set<int> contextIndices;
           
-          for (auto p = leftIndices.begin(); p != leftIndices.end(); ++p) contextIndices.push_back(*p);
-          for (auto p = rightIndices.begin(); p != rightIndices.end(); ++p) contextIndices.push_back(*p);
+          for (auto p = leftIndices.begin(); p != leftIndices.end(); ++p) contextIndices.insert(*p);
+          for (auto p = rightIndices.begin(); p != rightIndices.end(); ++p) contextIndices.insert(*p);
           
           TrainInstance inst;
           inst.givenWordIndex = trainWordIndex;
@@ -162,9 +162,9 @@ std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<s
   return output;
 }
 
-void train(const std::vector<TrainInstance> &trainInstances, std::map<int, std::vector<double>> &inputWeights, 
+void train(std::vector<TrainInstance> &trainInstances, std::map<int, std::vector<double>> &inputWeights, 
            std::map<int, std::vector<double>> &outputWeights, std::map<int, double> &wordProbabilities, 
-           const int &negativeSamplesSize, const double &learningRate) {
+           const int &negativeSamplesSize, const double &learningRate, const int &numEpochs) {
   
   std::vector<double> wordProbs;
   std::vector<int> wordIndexes;
@@ -179,87 +179,99 @@ void train(const std::vector<TrainInstance> &trainInstances, std::map<int, std::
   boost::random::uniform_int_distribution<> uni(0, (int)trainInstances.size()-1);
   boost::random::discrete_distribution<> dist(wordProbs);
   
-  std::unordered_map<int, std::unordered_map<int, double>> inputGrads, outputGrads;
+  int epoch = 1;
   
-  int numRound = 1;
-  
-  while (numRound <= (int)trainInstances.size()) {
+  while(epoch <= numEpochs) {
     
-    int random_integer = uni(gen);
-    TrainInstance instance = trainInstances[random_integer];
+    std::unordered_map<int, std::unordered_map<int, double>> inputGrads, outputGrads;
+    std::random_shuffle (trainInstances.begin(), trainInstances.end());
     
-    int inputWordIndex = instance.givenWordIndex;
-    std::vector<int> contextWordIndices = instance.contextWordsIndices;
-    
-    std::vector<double> inputVector = inputWeights[inputWordIndex];
-    
-    std::vector<int> sampledIndices;
-    
-    for (int j = 1; j <= negativeSamplesSize; j++) sampledIndices.push_back(wordIndexes[dist(gen)]);
-    
-    std::map<int, double> errors;
-    
-    for (size_t i = 0; i < contextWordIndices.size(); i++) {
-      int contextWordIndex = contextWordIndices[i];
+    for (size_t i = 0; i < trainInstances.size(); i++) {
       
-      std::vector<int> sampledContextIndices(sampledIndices.begin(), sampledIndices.end());
+      TrainInstance instance = trainInstances[i];
       
-      sampledContextIndices.push_back(contextWordIndex);
+      int inputWordIndex = instance.givenWordIndex;
+      std::set<int> contextWordIndices = instance.contextWordsIndices;
       
-      std::map<int, double> outputs;
-      double sumOut = 0;
+      std::vector<double> inputVector = inputWeights[inputWordIndex];
       
-      for (auto p = sampledContextIndices.begin(); p != sampledContextIndices.end(); ++p) {
-        std::vector<double> outVec = outputWeights[*p];
+      std::vector<int> sampledIndices;
+      
+      int j = 1;
+      
+      while (j <= negativeSamplesSize) {
+        int sampledIndex = wordIndexes[dist(gen)];
         
-        double out = 0;
-        
-        for (size_t j = 0; j < outVec.size(); j++) out += outVec[j]*inputVector[j];
-        
-        outputs[*p] = 1/(1+exp(-out));
-        
-        sumOut += outputs[*p];
+        if (contextWordIndices.find(sampledIndex) == contextWordIndices.end()) {
+          sampledIndices.push_back(sampledIndex);
+          j++;
+        }
       }
       
-      for (auto p = outputs.begin(); p != outputs.end(); ++p) {
-        double prob = (p->second)/sumOut;
+      std::map<int, double> errors;
+      
+      for (auto p = contextWordIndices.begin(); p != contextWordIndices.end(); ++p) {
+        int contextWordIndex = *p;
         
-        double err = prob;
+        std::vector<int> sampledWordIndices(sampledIndices.begin(), sampledIndices.end());
         
-        if (p->first == contextWordIndex) err -= 1;
+        sampledWordIndices.push_back(contextWordIndex);
         
-        errors[p->first] += err;
+        std::map<int, double> outputs;
+        double sumOut = 0;
+        
+        for (auto q = sampledWordIndices.begin(); q != sampledWordIndices.end(); ++q) {
+          std::vector<double> outputVector = outputWeights[*q];
+          
+          double out = 0;
+          
+          for (size_t j = 0; j < outputVector.size(); j++) out += outputVector[j]*inputVector[j];
+          
+          outputs[*q] = 1/(1+exp(-out));
+          
+          sumOut += outputs[*q];
+        }
+        
+        for (auto q = outputs.begin(); q != outputs.end(); ++q) {
+          double prob = (q->second)/sumOut;
+          
+          double err = prob;
+          
+          if (q->first == contextWordIndex) err -= 1;
+          
+          errors[q->first] += err;
+        }
       }
-    }
-    
-    std::map<int, double> weightedError;
-    
-    for (auto p = errors.begin(); p != errors.end(); ++p) {
-      for (size_t i = 0; i < inputVector.size(); i++) {
+      
+      std::map<int, double> weightedError;
+      
+      for (auto p = errors.begin(); p != errors.end(); ++p) {
+        for (size_t j = 0; j < inputVector.size(); j++) {
+          
+          double newLearningRate = learningRate;
+          double grad = (p->second)*inputWeights[p->first][j];
+          
+          outputGrads[p->first][j] += grad*grad;
+          
+          newLearningRate /= sqrt(outputGrads[p->first][j]);
+          outputWeights[p->first][j] -= newLearningRate*grad;
+          
+          weightedError[j] += (p->second)*outputWeights[p->first][j];
+        }
+      }
+      
+      for (size_t j = 0; j < inputVector.size(); j++) {
         double newLearningRate = learningRate;
-        double grad = (p->second)*inputWeights[p->first][i];
+        double grad = weightedError[j];
         
-        outputGrads[p->first][i] += grad*grad;
+        inputGrads[inputWordIndex][j] += grad*grad;
         
-        newLearningRate /= sqrt(outputGrads[p->first][i]);
-        outputWeights[p->first][i] -= newLearningRate*grad;
+        newLearningRate /= sqrt(inputGrads[inputWordIndex][j]);
         
-        weightedError[i] += (p->second)*outputWeights[p->first][i];
+        inputWeights[inputWordIndex][j] -= newLearningRate*grad;
       }
     }
-    
-    for (size_t i = 0; i < inputVector.size(); i++) {
-      double newLearningRate = learningRate;
-      double grad = weightedError[i];
-      
-      inputGrads[inputWordIndex][i] += grad*grad;
-      
-      newLearningRate /= sqrt(inputGrads[inputWordIndex][i]);
-      
-      inputWeights[inputWordIndex][i] -= newLearningRate*weightedError[i];
-    }
-    
-    numRound++;
+    epoch++;
   }
 }
 
@@ -304,7 +316,7 @@ std::map<int, double> getUnigramDistribution(const std::vector<std::vector<std::
 List cpp__generateWordVectors(std::vector<std::vector<std::string>> textContents, 
                               std::vector<std::string> excludeWords,
                               int vectorSize=300, int contextSize=5, 
-                              int negativeSamplesSize=10, double learningRate=0.1) {
+                              int negativeSamplesSize=10, double learningRate=0.01, int numEpochs=5) {
   
   std::vector<std::vector<std::vector<std::string>>> tokenizedWords = tokenize(textContents, excludeWords);
   
@@ -324,7 +336,7 @@ List cpp__generateWordVectors(std::vector<std::vector<std::string>> textContents
   
   tokenizedWords.clear();
 
-  train(trainInstances, inputWeights, outputWeights, wordCounts, negativeSamplesSize, learningRate);
+  train(trainInstances, inputWeights, outputWeights, wordCounts, negativeSamplesSize, learningRate, numEpochs);
 
   return List::create(_["Words"]=wordIndex, _["WordFreq"]=wordCounts, _["InputVectors"]=inputWeights);
 }
