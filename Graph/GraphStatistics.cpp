@@ -226,26 +226,15 @@ std::unordered_map<int, std::unordered_map<int, double>> train(const std::vector
     int currWordIndex = instance.givenWordIndex;
     std::set<int> contextWordsIndices = instance.contextWordsIndices;
     
-    for (auto p = contextWordsIndices.begin(); p != contextWordsIndices.end(); ++p) {
-      nodes[currWordIndex][*p]++;
-      nodes[*p][currWordIndex]++;
-    }
+    for (auto p = contextWordsIndices.begin(); p != contextWordsIndices.end(); ++p) nodes[*p][currWordIndex]++;
   }
-  
-  std::unordered_map<int, double> neighborsSum;
-  
+
   for (auto p = nodes.begin(); p != nodes.end();++p) {
     std::unordered_map<int, double> x = p->second;
     
     double sum = 0;
     for (auto q = x.begin(); q != x.end(); ++q) sum += q->second;
-    neighborsSum[p->first] = sum;
-  }
-  
-  for (auto p = nodes.begin(); p != nodes.end();++p) {
-    std::unordered_map<int, double> x = p->second;
-    
-    for (auto q = x.begin(); q != x.end(); ++q) nodes[p->first][q->first] /= (neighborsSum[p->first]+neighborsSum[q->first]-nodes[p->first][q->first]);
+    for (auto q = x.begin(); q != x.end(); ++q) nodes[p->first][q->first] /= sum;
   }
   
   return nodes;
@@ -343,58 +332,58 @@ std::unordered_map<int, double> mostContextual(std::unordered_map<int, std::unor
   
   int currIdx = index;
   std::set<int> visitedNodes;
-
+  
   std::priority_queue<std::pair<int, double>, std::vector<std::pair<int, double>>, comparator> minHeap;
-
+  
   std::queue<int> nodeQueue, depthQueue;
   std::queue<double> scoreQueue;
-
+  
   nodeQueue.push(currIdx);
   scoreQueue.push(1.0);
   depthQueue.push(0);
-
+  
   while(!nodeQueue.empty()) {
-
+    
     int frontIdx = nodeQueue.front();
     int frontDepth = depthQueue.front();
     double frontScore = scoreQueue.front();
-
+    
     if (frontDepth >= maxDepth) break;
-
+    
     visitedNodes.insert(frontIdx);
-
+    
     std::unordered_map<int, double> neighbors = nodes[frontIdx];
-
+    
     nodeQueue.pop();
     scoreQueue.pop();
     depthQueue.pop();
-
+    
     for (auto p = neighbors.begin(); p != neighbors.end(); ++p) {
       double score = frontScore*p->second;
-
+      
       if (visitedNodes.find(p->first) == visitedNodes.end()) {
-
+        
         if ((int)minHeap.size() >= count && minHeap.top().second < score) minHeap.pop();
-
+        
         if (minHeap.empty() || (int)minHeap.size() < count) {
           nodeQueue.push(p->first);
           scoreQueue.push(score);
           depthQueue.push(frontDepth+1);
-
+          
           minHeap.push(std::make_pair(p->first, score));
         }
       }
     }
   }
-
+  
   std::unordered_map<int, double> output;
-
+  
   while(!minHeap.empty()) {
     std::pair<int, double> tops = minHeap.top();
     output[tops.first] = tops.second;
     minHeap.pop();
   }
-
+  
   return output;
 }
 
@@ -435,7 +424,7 @@ struct ModelData {
   std::unordered_map<int, std::string> invertedWordIndex;
 };
 
-ModelData convertModelDataFrame(List model) {
+ModelData convertModelDataFrame(const List &model) {
   
   ModelData modelData;
   
@@ -510,9 +499,9 @@ std::unordered_map<std::string, double> cpp__getMostSimilarMultiple(List model, 
 }
 
 // [[Rcpp::export]]
-DataFrame cpp__getCorrectedWords(List model, std::vector<std::vector<std::string>> textContents, 
-                                 std::vector<std::string> excludeWords, std::vector<std::string> vocabulary, 
-                                 int contextSize=5, int similarCounts=50, int maxDepth=2) {
+List cpp__spellCorrect(List model, std::vector<std::vector<std::string>> textContents, 
+                       std::vector<std::string> excludeWords, std::vector<std::string> vocabulary, 
+                       int contextSize=5, int similarCounts=50, int maxDepth=2) {
   
   std::vector<std::vector<std::vector<std::string>>> tokenizedWords = tokenize(textContents, excludeWords);
   
@@ -552,7 +541,9 @@ DataFrame cpp__getCorrectedWords(List model, std::vector<std::vector<std::string
           int d = (int)levenshteinDistance(incorrectWord, possibleWord);
           
           if (d > 0 && d < minDistance && (double)d/(double)incorrectWord.size() <= 0.33 
-                && (vocab.find(possibleWord) != vocab.end() || (contextIds.size() >= contextSize && temp[j].second >= contextSize))) {
+                && (vocab.find(possibleWord) != vocab.end() 
+                      || modelData.nodes[modelData.wordIndex[possibleWord]].size() > modelData.nodes[modelData.wordIndex[incorrectWord]].size())) {
+                      
             minDistance = d;
             correctWord = possibleWord;
           }
@@ -568,5 +559,27 @@ DataFrame cpp__getCorrectedWords(List model, std::vector<std::vector<std::string
     }
   }
   
-  return DataFrame::create(_["Incorrect"]=incorrect, _["Correct"]=correct);
+  std::vector<std::vector<std::string>> updatedTextContents;
+  
+  for (size_t i = 0; i < tokenizedWords.size(); i++) {
+    std::vector<std::vector<std::string>> fileContent = tokenizedWords[i];
+    std::vector<std::string> updatedFileContent;
+    
+    for (size_t j = 0; j < fileContent.size(); j++) {
+      std::vector<std::string> lineContent = fileContent[j];
+      
+      std::string line = "";
+      for (size_t k = 0; k < lineContent.size(); k++) {
+        std::string word = lineContent[k];
+        
+        if (cache.find(word) != cache.end()) line += cache[word] + " ";
+        else line += word + " ";
+      }
+      
+      updatedFileContent.push_back(line);
+    }
+    updatedTextContents.push_back(updatedFileContent);
+  }
+  
+  return List::create(_["Corrections"]=DataFrame::create(_["Incorrect"]=incorrect, _["Correct"]=correct), _["UpdatedContents"]=updatedTextContents);
 }
