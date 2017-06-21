@@ -113,4 +113,4 @@ def trainTestSVM_Word2Vec(train, test):
 train = Doc2Vec.getTrainTokens()
 test = Doc2Vec.getTestTokens()
 
-print trainTestSVM_Word2Vec(train, test)
+print trainTestSVM_Doc2Vec(train, test)

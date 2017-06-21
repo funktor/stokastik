@@ -228,7 +228,7 @@ std::unordered_map<int, std::unordered_map<int, double>> train(const std::vector
     
     for (auto p = contextWordsIndices.begin(); p != contextWordsIndices.end(); ++p) nodes[*p][currWordIndex]++;
   }
-
+  
   for (auto p = nodes.begin(); p != nodes.end();++p) {
     std::unordered_map<int, double> x = p->second;
     

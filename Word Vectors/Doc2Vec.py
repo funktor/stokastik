@@ -5,7 +5,7 @@ from sklearn import svm
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
-min_count = 20
+min_count = 10
 context_window = 10
 vector_size = 300
 downsample = 1e-5
