@@ -71,131 +71,54 @@ size_t levenshteinDistance(const std::string &s1, const std::string &s2) {
   return result;
 }
 
-bool BothAreSpaces(char lhs, char rhs) { return (lhs == rhs) && (lhs == ' '); }
-
-std::string toLowerCase(std::string str) {
-  boost::algorithm::to_lower(str);
-  return str;
-}
-
-std::vector<std::string> removeStopWords(const std::vector<std::string> &words, const std::set<std::string> &stopWords) {
-  
-  std::vector<std::string> updatedWords;
-  for (size_t j = 0; j < words.size(); j++) if (stopWords.find(words[j]) == stopWords.end()) updatedWords.push_back(words[j]);
-  
-  return updatedWords;
-}
-
-std::vector<std::string> extractWords(std::string &str) {
-  std::string::iterator new_end = std::unique(str.begin(), str.end(), BothAreSpaces);
-  str.erase(new_end, str.end());
-  
-  std::string delimiters(" \r\n\t`~!@#$%^&*()-+=[]{}|\\;:'\",<.>/?");
-  std::vector<std::string> words;
-  boost::split(words, str, boost::is_any_of(delimiters));
-  
-  return words;
-}
-
-
-std::vector<std::string> stripWhiteSpaces(const std::vector<std::string> &words) {
-  std::vector<std::string> updatedWords;
-  for (size_t i = 0; i < words.size(); i++) if (words[i] != "" && words[i] != " ") updatedWords.push_back(words[i]);
-  
-  return updatedWords;
-}
-
-std::vector<std::string> trimWords(std::vector<std::string> &words) {
-  for (size_t i = 0; i < words.size(); i++) boost::trim(words[i]);
-  
-  return words;
-}
-
-std::vector<std::vector<std::vector<std::string>>> tokenize(const std::vector<std::vector<std::string>> &textContents, 
-                                                            std::vector<std::string> &excludeWords) {
-  
-  std::vector<std::vector<std::vector<std::string>>> fileFeatures;
-  
-  excludeWords = myMap(excludeWords, toLowerCase);
-  std::set<std::string> stopWords(excludeWords.begin(), excludeWords.end());
-  
-  for (size_t i = 0; i < textContents.size(); i++) {
-    
-    std::vector<std::string> contents = textContents[i];
-    std::vector<std::vector<std::string>> vec;
-    
-    int j = 0;
-    
-    while (j < (int)contents.size()) {
-      
-      std::vector<std::string> words = extractWords(contents[j]);
-      
-      words = myMap(words, toLowerCase);
-      
-      if (!stopWords.empty()) words = removeStopWords(words, stopWords);
-      
-      words = trimWords(words);
-      words = stripWhiteSpaces(words);
-      
-      vec.push_back(words);
-      j++;
-    }
-    fileFeatures.push_back(vec);
-  }
-  
-  return fileFeatures;
-}
-
 struct TrainInstance {
   int givenWordIndex;
   std::set<int> contextWordsIndices;
 };
 
-std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<std::vector<std::vector<std::string>>> &tokenizedWords, 
+std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<std::vector<std::string>> &documentWords, 
                                                              std::unordered_map<std::string, int> &wordIndex, const int &contextSize,
                                                              const std::vector<std::string> &vocabulary, const bool &onlyNonVocab) {
   
   std::vector<TrainInstance> output;
   std::set<std::string> vocab(vocabulary.begin(), vocabulary.end());
   
-  for (int i = 0; i < tokenizedWords.size(); i++) {
-    for (int j = 0; j < tokenizedWords[i].size(); j++) {
-      if (tokenizedWords[i][j].size() > 1) {
-        std::deque<int> leftIndices, rightIndices;
+  for (int i = 0; i < documentWords.size(); i++) {
+    if (documentWords[i].size() > 1) {
+      std::deque<int> leftIndices, rightIndices;
+      
+      for (int k = 0; k < documentWords[i].size(); k++) {
         
-        for (int k = 0; k < tokenizedWords[i][j].size(); k++) {
+        std::string trainWord = documentWords[i][k];
+        int trainWordIndex = wordIndex[trainWord];
+        
+        if (k > contextSize) {
+          leftIndices.pop_front();
+          leftIndices.push_back(wordIndex[documentWords[i][k-1]]);
+        }
+        else if (k > 0) leftIndices.push_back(wordIndex[documentWords[i][k-1]]);
+        
+        int maxEl = std::min((double)contextSize, (double)documentWords[i].size()-1);
+        
+        if (k == 0) for (int m = 1; m <= maxEl; m++) rightIndices.push_back(wordIndex[documentWords[i][m]]);
+        
+        else if (k + contextSize < documentWords[i].size()) {
+          rightIndices.pop_front();
+          rightIndices.push_back(wordIndex[documentWords[i][k + contextSize]]);
+        }
+        else rightIndices.pop_front();
+        
+        std::set<int> contextIndices;
+        
+        for (auto p = leftIndices.begin(); p != leftIndices.end(); ++p) contextIndices.insert(*p);
+        for (auto p = rightIndices.begin(); p != rightIndices.end(); ++p) contextIndices.insert(*p);
+        
+        if ((onlyNonVocab && vocab.find(trainWord) == vocab.end()) || !onlyNonVocab) {
+          TrainInstance inst;
+          inst.givenWordIndex = trainWordIndex;
+          inst.contextWordsIndices = contextIndices;
           
-          std::string trainWord = tokenizedWords[i][j][k];
-          int trainWordIndex = wordIndex[trainWord];
-          
-          if (k > contextSize) {
-            leftIndices.pop_front();
-            leftIndices.push_back(wordIndex[tokenizedWords[i][j][k-1]]);
-          }
-          else if (k > 0) leftIndices.push_back(wordIndex[tokenizedWords[i][j][k-1]]);
-          
-          int maxEl = std::min((double)contextSize, (double)tokenizedWords[i][j].size()-1);
-          
-          if (k == 0) for (int m = 1; m <= maxEl; m++) rightIndices.push_back(wordIndex[tokenizedWords[i][j][m]]);
-          
-          else if (k + contextSize < tokenizedWords[i][j].size()) {
-            rightIndices.pop_front();
-            rightIndices.push_back(wordIndex[tokenizedWords[i][j][k + contextSize]]);
-          }
-          else rightIndices.pop_front();
-          
-          std::set<int> contextIndices;
-          
-          for (auto p = leftIndices.begin(); p != leftIndices.end(); ++p) contextIndices.insert(*p);
-          for (auto p = rightIndices.begin(); p != rightIndices.end(); ++p) contextIndices.insert(*p);
-          
-          if ((onlyNonVocab && vocab.find(trainWord) == vocab.end()) || !onlyNonVocab) {
-            TrainInstance inst;
-            inst.givenWordIndex = trainWordIndex;
-            inst.contextWordsIndices = contextIndices;
-            
-            output.push_back(inst);
-          }
+          output.push_back(inst);
         }
       }
     }
@@ -204,12 +127,10 @@ std::vector<TrainInstance> generateSkipGramTrainingInstances(const std::vector<s
   return output;
 }
 
-std::unordered_map<std::string, int> getWordIndices(const std::vector<std::vector<std::vector<std::string>>> &tokenizedWords) {
+std::unordered_map<std::string, int> getWordIndices(const std::vector<std::vector<std::string>> &documentWords) {
   std::set<std::string> wordSet;
   
-  for (size_t i = 0; i < tokenizedWords.size(); i++) {
-    for (size_t j = 0; j < tokenizedWords[i].size(); j++) wordSet.insert(tokenizedWords[i][j].begin(), tokenizedWords[i][j].end());
-  }
+  for (size_t i = 0; i < documentWords.size(); i++) wordSet.insert(documentWords[i].begin(), documentWords[i].end());
   
   std::vector<std::string> uniqueWords(wordSet.begin(), wordSet.end());
   std::unordered_map<std::string, int> wordIndex = invertedIndex(uniqueWords);
@@ -241,17 +162,12 @@ std::unordered_map<int, std::unordered_map<int, double>> train(const std::vector
 }
 
 // [[Rcpp::export]]
-List cpp__generateGraph(std::vector<std::vector<std::string>> textContents, 
-                        std::vector<std::string> excludeWords, int contextSize=5) {
+List cpp__generateGraph(std::vector<std::vector<std::string>> documentWords, int contextSize=5) {
   
-  std::vector<std::vector<std::vector<std::string>>> tokenizedWords = tokenize(textContents, excludeWords);
+  std::unordered_map<std::string, int> wordIndex = getWordIndices(documentWords);
   
-  std::unordered_map<std::string, int> wordIndex = getWordIndices(tokenizedWords);
-  
-  std::vector<TrainInstance> trainInstances = generateSkipGramTrainingInstances(tokenizedWords, wordIndex, 
+  std::vector<TrainInstance> trainInstances = generateSkipGramTrainingInstances(documentWords, wordIndex, 
                                                                                 contextSize, std::vector<std::string>(), false);
-  
-  tokenizedWords.clear();
   
   std::unordered_map<int, std::unordered_map<int, double>> nodes = train(trainInstances);
   
@@ -280,51 +196,15 @@ List cpp__generateGraph(std::vector<std::vector<std::string>> textContents,
                       _["Nodes"]=DataFrame::create(_["NodeA"]=fromNodeIdx, _["NodeB"]=toNodeIdx, _["Prob"]=probs));
 }
 
-double bfsSearch(std::unordered_map<int, std::unordered_map<int, double>> &nodes, 
-                 const int &index1, const int &index2) {
-  
-  std::set<int> visitedNodes;
-  
-  std::queue<int> nodeQueue;
-  std::queue<double> scoreQueue;
-  
-  int currIdx = index1;
-  
-  nodeQueue.push(currIdx);
-  scoreQueue.push(1.0);
-  
-  double maxScore = 0;
-  
-  while(!nodeQueue.empty()) {
-    int frontIdx = nodeQueue.front();
-    double frontScore = scoreQueue.front();
-    
-    visitedNodes.insert(frontIdx);
-    
-    std::unordered_map<int, double> neighbors = nodes[frontIdx];
-    
-    nodeQueue.pop();
-    scoreQueue.pop();
-    
-    for (auto p = neighbors.begin(); p != neighbors.end(); ++p) {
-      double score = frontScore*p->second;
-      
-      if (p->first == index2 && score > maxScore) maxScore = score;
-      
-      if (p->first != index2 && visitedNodes.find(p->first) == visitedNodes.end() && score > maxScore) {
-        nodeQueue.push(p->first);
-        scoreQueue.push(score);
-      }
-    }
-  }
-  
-  return maxScore;
-}
-
 struct comparator {
   bool operator()(const std::pair<int, double> &a, const std::pair<int, double> &b) {
     return a.second > b.second;
   }
+};
+
+struct NodeQueue {
+  int nodeIdx, nodeDepth;
+  double nodeScore;
 };
 
 std::unordered_map<int, double> mostContextual(std::unordered_map<int, std::unordered_map<int, double>> &nodes, 
@@ -335,41 +215,31 @@ std::unordered_map<int, double> mostContextual(std::unordered_map<int, std::unor
   
   std::priority_queue<std::pair<int, double>, std::vector<std::pair<int, double>>, comparator> minHeap;
   
-  std::queue<int> nodeQueue, depthQueue;
-  std::queue<double> scoreQueue;
-  
-  nodeQueue.push(currIdx);
-  scoreQueue.push(1.0);
-  depthQueue.push(0);
+  std::queue<NodeQueue> nodeQueue;
+
+  nodeQueue.push({currIdx, 0, 1.0});
   
   while(!nodeQueue.empty()) {
     
-    int frontIdx = nodeQueue.front();
-    int frontDepth = depthQueue.front();
-    double frontScore = scoreQueue.front();
+    NodeQueue frontNode = nodeQueue.front();
     
-    if (frontDepth >= maxDepth) break;
+    if (frontNode.nodeDepth >= maxDepth) break;
     
-    visitedNodes.insert(frontIdx);
+    visitedNodes.insert(frontNode.nodeIdx);
     
-    std::unordered_map<int, double> neighbors = nodes[frontIdx];
+    std::unordered_map<int, double> neighbors = nodes[frontNode.nodeIdx];
     
     nodeQueue.pop();
-    scoreQueue.pop();
-    depthQueue.pop();
     
     for (auto p = neighbors.begin(); p != neighbors.end(); ++p) {
-      double score = frontScore*p->second;
+      double score = frontNode.nodeScore*p->second;
       
       if (visitedNodes.find(p->first) == visitedNodes.end()) {
         
         if ((int)minHeap.size() >= count && minHeap.top().second < score) minHeap.pop();
         
         if (minHeap.empty() || (int)minHeap.size() < count) {
-          nodeQueue.push(p->first);
-          scoreQueue.push(score);
-          depthQueue.push(frontDepth+1);
-          
+          nodeQueue.push({p->first, frontNode.nodeDepth+1, score});
           minHeap.push(std::make_pair(p->first, score));
         }
       }
@@ -450,16 +320,6 @@ ModelData convertModelDataFrame(const List &model) {
 }
 
 // [[Rcpp::export]]
-double cpp__computeSimilarity(List model, std::string word1, std::string word2) {
-  
-  ModelData modelData = convertModelDataFrame(model);
-  
-  if (modelData.wordIndex.find(word1) != modelData.wordIndex.end() 
-        && modelData.wordIndex.find(word2) != modelData.wordIndex.end()) return bfsSearch(modelData.nodes, modelData.wordIndex[word1], modelData.wordIndex[word2]);
-  else return 0;
-}
-
-// [[Rcpp::export]]
 std::unordered_map<std::string, double> cpp__getMostSimilar(List model, std::string target, 
                                                             int similarCounts=10, int maxDepth=1) {
   
@@ -499,15 +359,13 @@ std::unordered_map<std::string, double> cpp__getMostSimilarMultiple(List model, 
 }
 
 // [[Rcpp::export]]
-List cpp__spellCorrect(List model, std::vector<std::vector<std::string>> textContents, 
-                       std::vector<std::string> excludeWords, std::vector<std::string> vocabulary, 
+List cpp__spellCorrect(List model, std::vector<std::vector<std::string>> documentWords, 
+                       std::vector<std::string> vocabulary, 
                        int contextSize=5, int similarCounts=50, int maxDepth=2) {
-  
-  std::vector<std::vector<std::vector<std::string>>> tokenizedWords = tokenize(textContents, excludeWords);
   
   ModelData modelData = convertModelDataFrame(model);
   
-  std::vector<TrainInstance> nonVocab = generateSkipGramTrainingInstances(tokenizedWords, modelData.wordIndex, 
+  std::vector<TrainInstance> nonVocab = generateSkipGramTrainingInstances(documentWords, modelData.wordIndex, 
                                                                           contextSize, vocabulary, true);
   
   std::unordered_map<std::string, std::string> cache;
@@ -559,27 +417,17 @@ List cpp__spellCorrect(List model, std::vector<std::vector<std::string>> textCon
     }
   }
   
-  std::vector<std::vector<std::string>> updatedTextContents;
-  
-  for (size_t i = 0; i < tokenizedWords.size(); i++) {
-    std::vector<std::vector<std::string>> fileContent = tokenizedWords[i];
+  for (size_t i = 0; i < documentWords.size(); i++) {
+    std::vector<std::string> words = documentWords[i];
     std::vector<std::string> updatedFileContent;
     
-    for (size_t j = 0; j < fileContent.size(); j++) {
-      std::vector<std::string> lineContent = fileContent[j];
+    for (size_t j = 0; j < words.size(); j++) {
+      std::string word = words[j];
       
-      std::string line = "";
-      for (size_t k = 0; k < lineContent.size(); k++) {
-        std::string word = lineContent[k];
-        
-        if (cache.find(word) != cache.end()) line += cache[word] + " ";
-        else line += word + " ";
-      }
-      
-      updatedFileContent.push_back(line);
+      if (cache.find(word) != cache.end()) words[j] = cache[word];
     }
-    updatedTextContents.push_back(updatedFileContent);
+    documentWords[i] = words;
   }
   
-  return List::create(_["Corrections"]=DataFrame::create(_["Incorrect"]=incorrect, _["Correct"]=correct), _["UpdatedContents"]=updatedTextContents);
+  return List::create(_["Corrections"]=DataFrame::create(_["Incorrect"]=incorrect, _["Correct"]=correct), _["UpdatedContents"]=documentWords);
 }

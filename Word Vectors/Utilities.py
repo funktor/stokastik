@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+#logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 def getContents(type='train'):
     mydata = fetch_20newsgroups(subset=type, shuffle=True, random_state=42)

@@ -56,7 +56,7 @@ def trainTestSVM_Doc2Vec(train, test, useFullData=1):
     else:
         tokens = train['Tokens']
 
-    vectorModel = Doc2Vec.trainDoc2Vec(tokens, 'doc2vec')
+    vectorModel = Doc2Vec.trainDoc2Vec(tokens, 'doc2vec__'+str(useFullData))
 
     trainTokens = train['Tokens']
 
@@ -91,7 +91,7 @@ def trainTestSVM_Word2Vec(train, test):
 
     tokens = train['Tokens'] + test['Tokens']
 
-    vectorModel = Doc2Vec.trainDoc2Vec(tokens, 'doc2vec')
+    vectorModel = Doc2Vec.trainDoc2Vec(tokens, 'doc2vec__1')
 
     vocab = set.intersection(set(vectorModel.wv.vocab), set(vectorizer.vocabulary_.keys()))
 
@@ -113,4 +113,7 @@ def trainTestSVM_Word2Vec(train, test):
 train = Doc2Vec.getTrainTokens()
 test = Doc2Vec.getTestTokens()
 
-print trainTestSVM_Doc2Vec(train, test)
+# print trainTestSVM(train, test)
+print trainTestSVM_Doc2Vec(train, test, useFullData=1)
+print trainTestSVM_Doc2Vec(train, test, useFullData=0)
+print trainTestSVM_Word2Vec(train, test)
