@@ -27,6 +27,8 @@ def getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections=2):
         subword = word[0:i] + word[i + 1:len(word)]
         res = test(clf, vectorizer, [subword])
 
+        res[0] = [''] + res[0]
+
         for j in range(3):
             char = res[0][j]
             possibleWord = word[0:i] + char + word[i + 1:len(word)]
@@ -83,4 +85,4 @@ pickle.dump(model, open('model.sav', 'wb'))
 
 model = pickle.load(open('model.sav', 'rb'))
 
-print spellCorrect(model['classifier'], model['vectorizer'], 'feiescoqe', model['counts'], max_num_corrections=3)
+print spellCorrect(model['classifier'], model['vectorizer'], 'christian', model['counts'], max_num_corrections=1)
