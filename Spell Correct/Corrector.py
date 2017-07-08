@@ -41,11 +41,11 @@ def test(clf, vectorizer, words):
 def getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections=2, incorrectWordCountThreshold=10):
     possibleWords = []
 
-    for i in range(2 * len(word)):
+    for i in range(2 * len(word)+1):
         if i % 2 == 0:
-            leftSubWord, rightSubWord = word[0:(i / 2)], word[(i / 2) + 1:len(word)]
+            leftSubWord, rightSubWord = word[0:(i / 2)], word[(i / 2):len(word)]
         else:
-            leftSubWord, rightSubWord = word[0:(i + 1) / 2], word[(i + 1) / 2:len(word)]
+            leftSubWord, rightSubWord = word[0:(i - 1) / 2], word[((i - 1) / 2) + 1:len(word)]
 
         subword = leftSubWord + rightSubWord
         res = test(clf, vectorizer, [subword])
