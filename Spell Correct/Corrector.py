@@ -6,6 +6,7 @@ import gensim, logging, os, editdistance
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 def trainNN(trainData, trainLabels):
+
     clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(100), random_state=1)
     clf.fit(trainData, trainLabels)
 
@@ -31,14 +32,16 @@ def trainWord2VecModel(contents):
     return model
 
 
-def test(clf, vectorizer, words):
-    instances = [Utilities.generateInstanceFromWord(word, 1, 2) for word in words]
+def test(clf, vectorizer, words, contexts):
+    inputs = zip(words, contexts)
+
+    instances = [Utilities.generateInstanceFromWord(word, contextWords, 1, 2) for word, contextWords in inputs]
     testData = vectorizer.transform(instances)
 
     return [[x for (y, x) in sorted(zip(pred, clf.classes_), reverse=True)] for pred in clf.predict_proba(testData)]
 
 
-def getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections=2, incorrectWordCountThreshold=10):
+def getSuggestions(clf, vectorizer, word, contextWords, wordCounts, max_num_corrections=2, incorrectWordCountThreshold=10):
     possibleWords = []
 
     for i in range(2 * len(word)+1):
@@ -48,7 +51,7 @@ def getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections=2, inc
             leftSubWord, rightSubWord = word[0:(i - 1) / 2], word[((i - 1) / 2) + 1:len(word)]
 
         subword = leftSubWord + rightSubWord
-        res = test(clf, vectorizer, [subword])
+        res = test(clf, vectorizer, [subword], [contextWords])
 
         res[0] = [''] + res[0]
 
@@ -69,14 +72,14 @@ def getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections=2, inc
                 if a or b:
                     possibleWords.append(possibleWord)
             else:
-                possibleWords = possibleWords + getSuggestions(clf, vectorizer, possibleWord, wordCounts,
+                possibleWords = possibleWords + getSuggestions(clf, vectorizer, possibleWord, contextWords, wordCounts,
                                                                max_num_corrections - 1)
 
     return possibleWords
 
 
-def spellCorrect(clf, vectorizer, word, wordCounts, max_num_corrections=2):
-    suggestions = getSuggestions(clf, vectorizer, word, wordCounts, max_num_corrections)
+def spellCorrect(clf, vectorizer, word, contextWords, wordCounts, max_num_corrections=2):
+    suggestions = getSuggestions(clf, vectorizer, word, contextWords, wordCounts, max_num_corrections)
 
     suggestions = set(suggestions)
 
@@ -92,7 +95,6 @@ def spellCorrect(clf, vectorizer, word, wordCounts, max_num_corrections=2):
 
 def spellCorrectW2V(w2vModel, word, contextWords, max_num_corrections=2):
     possibleWords = w2vModel.predict_output_word(contextWords, topn=30)
-    print possibleWords
 
     minDist = max_num_corrections+1
     correctedWord = word
@@ -109,13 +111,16 @@ def spellCorrectW2V(w2vModel, word, contextWords, max_num_corrections=2):
 def trainNNWordModel(contents):
 
     print "Getting words..."
-    words = Utilities.getWords(contents)
+    sentences = Utilities.getWords(contents)
+
+    print "Getting contexts..."
+    contexts = Utilities.getContexts(sentences, contextSize=10)
 
     print "Getting word counts..."
-    wordCounts = Utilities.getWordCounts(words)
+    wordCounts = Utilities.getWordCounts(contexts['TargetWords'])
 
     print "Getting instances..."
-    instances = Utilities.getInstances(words, wordCounts, min_word_count=10, max_word_count=30)
+    instances = Utilities.getInstances(contexts, wordCounts, min_word_count=10, max_word_count=30)
 
     vectorizer = CountVectorizer(binary=True, token_pattern='\\b[a-zA-Z]+\\b')
 
@@ -140,7 +145,8 @@ nnModel = trainNNWordModel(contents)
 nnModel = pickle.load(open('model.sav', 'rb'))
 
 print "Doing correction..."
-print spellCorrect(nnModel['classifier'], nnModel['vectorizer'], 'pundue', nnModel['counts'])
+print spellCorrect(nnModel['classifier'], nnModel['vectorizer'], 'pundue',
+                   "university engineering computer network distribution".split(), nnModel['counts'])
 
 
 w2vModel = trainWord2VecModel(contents)

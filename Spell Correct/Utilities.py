@@ -8,13 +8,23 @@ def getContents(type='train'):
 
     return [" ".join(data.split("\n")) for data in mydata.data]
 
-
 def myTokenizer(text):
     return nltk.regexp_tokenize(text, "\\b[a-zA-Z]{3,}\\b")
 
-
 def tokenizeContents(contents):
     return [myTokenizer(content) for content in contents]
+
+def getContexts(sentences, contextSize=5):
+    targetWords, contextWords = [], []
+
+    for sentence in sentences:
+        for i in range(len(sentence)):
+            leftContext = sentence[max(0, i - contextSize):max(0, i)]
+            rightContext = sentence[min(len(sentence) - 1, i + 1):min(len(sentence) - 1, i + contextSize+1)]
+            targetWords = targetWords + [sentence[i]]
+            contextWords = contextWords + [leftContext + rightContext]
+
+    return dict({"TargetWords":targetWords, "ContextWords":contextWords})
 
 
 def breakWordIntoNgrams(word, ngram_size=2):
@@ -30,31 +40,36 @@ def breakWordIntoNgrams(word, ngram_size=2):
     return ngrams
 
 
-def generateInstanceFromWord(word, min_ngram_size, max_ngram_size):
+def generateInstanceFromWord(word, contextWords, min_ngram_size, max_ngram_size):
     tokens = []
     for ngram_size in range(min_ngram_size, max_ngram_size + 1):
         tokens = tokens + breakWordIntoNgrams(word, ngram_size)
 
-    return " ".join(tokens)
+    return " ".join(tokens + contextWords)
 
 
-def getInstances(words, wordCounts, min_ngram_size=1, max_ngram_size=2, min_word_count=10, max_word_count=50):
+def getInstances(contexts, wordCounts, min_ngram_size=1, max_ngram_size=2, min_word_count=10, max_word_count=50):
     inputs = []
     outputs = []
 
     currWordCounts = dict()
 
-    for word in words:
+    words, contextWords = contexts['TargetWords'], contexts['ContextWords']
+
+    for i in range(len(words)):
+        word, context = words[i], contextWords[i]
+
         if wordCounts[word] >= min_word_count and (word not in currWordCounts or currWordCounts[word] < max_word_count):
             if word not in currWordCounts:
                 currWordCounts[word] = 1
             else:
                 currWordCounts[word] = currWordCounts[word] + 1
-            for i in range(len(word)):
-                subword = word[0:i] + word[i + 1:len(word)]
-                inp = generateInstanceFromWord(subword, min_ngram_size, max_ngram_size)
+
+            for j in range(len(word)):
+                subword = word[0:j] + word[j + 1:len(word)]
+                inp = generateInstanceFromWord(subword, context, min_ngram_size, max_ngram_size)
                 inputs.append(inp)
-                outputs.append(word[i])
+                outputs.append(word[j])
 
     return dict({'Inputs': inputs, 'Outputs': outputs})
 
@@ -79,7 +94,10 @@ def getWords(contents):
 
     docWords = tokenizeContents(contents)
 
-    outWords = [word for words in docWords for word in [word.lower() for word in words] if word in vocabulary]
+    outWords = []
+
+    for words in docWords:
+        outWords.append([word.lower() for word in words if word in vocabulary])
 
     return outWords
 
