@@ -28,25 +28,19 @@ def ngramTagger(train_sents, n=2, defaultTag='NN'):
         t3 = nltk.TrigramTagger(train_sents, backoff=t2)
         return t3
 
-
 def features(sentence, index):
 
     currWord = sentence[index][0]
 
     if (index > 0):
         prevWord = sentence[index - 1][0]
-        prevTag = sentence[index - 1][1]
     else:
         prevWord = '<START>'
-        prevTag = '<START_TAG>'
 
     if (index < len(sentence)-1):
         nextWord = sentence[index + 1][0]
-        nextTag = sentence[index + 1][1]
     else:
         nextWord = '<END>'
-        nextTag = '<END_TAG>'
-
 
     return {
         'word': currWord,
@@ -84,8 +78,6 @@ def features(sentence, index):
         'next_suffix-3': nextWord[-3:],
         'prev_word': prevWord,
         'next_word': nextWord,
-        'prev_tag': prevTag,
-        'next_tag': nextTag,
     }
 
 def transformDataset(sentences):

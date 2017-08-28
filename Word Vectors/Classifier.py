@@ -1,12 +1,28 @@
 import Doc2Vec, Utilities
 import numpy as np
 from sklearn import svm
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
 
-def trainTest(trainData, trainLabels, testData, testLabels):
+def trainTestSVM(trainData, trainLabels, testData, testLabels):
     clf = svm.SVC(decision_function_shape='ovo', C=100, gamma=0.9, kernel='rbf')
     clf.fit(trainData, trainLabels)
 
     return clf.score(testData, testLabels)
+
+def trainTestNN(trainData, trainLabels, testData, testLabels):
+    clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(30), random_state=1)
+    clf.fit(trainData, trainLabels)
+
+    return clf.score(testData, testLabels)
+
+def trainTest(train, test, trainFn=trainTestSVM):
+    vectorizer = Utilities.getVectorizer()
+
+    X_train = vectorizer.fit_transform(train['Contents'])
+    X_test = vectorizer.transform(test['Contents'])
+
+    return trainFn(X_train, train['Labels'], X_test, test['Labels'])
 
 def constructDocArrayFromWords(tokens, vocab, vectorizer, vectorModel, docFeatureMat):
     docArrays = np.zeros((len(tokens), Doc2Vec.vector_size))
@@ -38,16 +54,6 @@ def constructDocArrayFromWords(tokens, vocab, vectorizer, vectorModel, docFeatur
         docArrays[i] = weights.dot(temp)
 
     return docArrays
-
-
-def trainTestSVM(train, test):
-
-    vectorizer = Utilities.getVectorizer()
-
-    X_train = vectorizer.fit_transform(train['Contents'])
-    X_test = vectorizer.transform(test['Contents'])
-
-    return trainTest(X_train, train['Labels'], X_test, test['Labels'])
 
 def trainTestSVM_Doc2Vec(train, test, useFullData=1):
 
@@ -113,7 +119,7 @@ def trainTestSVM_Word2Vec(train, test):
 train = Doc2Vec.getTrainTokens()
 test = Doc2Vec.getTestTokens()
 
-# print trainTestSVM(train, test)
-print trainTestSVM_Doc2Vec(train, test, useFullData=1)
-print trainTestSVM_Doc2Vec(train, test, useFullData=0)
-print trainTestSVM_Word2Vec(train, test)
+print trainTest(train, test, trainTestNN)
+#print trainTestSVM_Doc2Vec(train, test, useFullData=1)
+#print trainTestSVM_Doc2Vec(train, test, useFullData=0)
+#print trainTestSVM_Word2Vec(train, test)

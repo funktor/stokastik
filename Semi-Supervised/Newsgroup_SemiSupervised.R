@@ -12,8 +12,22 @@ dtm <- slam::simple_triplet_matrix(i=dtm$i, j=dtm$j, v=dtm$v, nrow=max(dtm$i), n
 selected.features <- cpp__mutualInformation(dtm$i, dtm$j, classes = labels, maxFeaturesPerClass = 150)
 dtm <- dtm[,selected.features]
 
-dtm <- tm::weightBin(dtm)
+#dtm <- tm::weightBin(dtm)
 dtm <- tm::as.DocumentTermMatrix(dtm, weighting = function(x) tm::weightTfIdf(x, normalize = T))
+
+train.dtm <- dtm[1:length(train$Contents),]
+test.dtm <- dtm[(length(train$Contents)+1):length(contents),]
+
+df.train <- data.frame("i"=train.dtm$i, "j"=train.dtm$j, "v"=train.dtm$v)
+models <- cpp__nb(df.train, train.labels, nrow(train.dtm), ncol(train.dtm), lambda = 1, maxIter = 1)
+
+df.test <- data.frame("i"=test.dtm$i, "j"=test.dtm$j, "v"=test.dtm$v)
+out <- cpp__nbTest(df.test, models)
+
+preds <- unlist(lapply(out, function(x) as.integer(names(which(x == max(x)))[1])))
+x <- mean(preds == test.labels[as.integer(names(preds))])
+
+
 
 
 testFunction <- function(dtm, labels, train.pct=0.25, no.label.train.pct=0.5, lambda=1, maxIter=10) {
