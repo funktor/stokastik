@@ -165,7 +165,10 @@ def testOnline(onlineModel, test_sents):
     for model in onlineModel:
         predLabels = model.predict(testFeatures)
 
-        print f1_score(testLabels, predLabels, average='weighted')
+        labels = list(model.classes_)
+        labels.remove('O')
+
+        print f1_score(testLabels, predLabels, average='weighted', labels=labels)
 
     return 1
 
@@ -183,6 +186,14 @@ def transformDatasetSequence(sentences):
         wordLabels.append(labels)
 
     return wordFeatures, wordLabels
+
+def predictNERSentence(sentence, crf_model):
+    pos_tagged = nltk.pos_tag(nltk.word_tokenize(sentence))
+    annotated_sentence = [(x, y, z) for ((x, y), z) in zip(pos_tagged, ['']*len(pos_tagged))]
+
+    testFeatures, testLabels = transformDatasetSequence([annotated_sentence])
+
+    return crf_model.predict(testFeatures)
 
 def trainCRF(train_sents):
     trainFeatures, trainLabels = transformDatasetSequence(train_sents)
@@ -203,4 +214,7 @@ def testCRF(crf_model, test_sents):
 
     predLabels = crf_model.predict(testFeatures)
 
-    return metrics.flat_f1_score(testLabels, predLabels, average='weighted')
+    labels = list(crf_model.classes_)
+    labels.remove('O')
+
+    return metrics.flat_f1_score(testLabels, predLabels, average='weighted', labels=labels)
