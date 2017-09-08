@@ -148,9 +148,63 @@ def error_backpropagation(trainX, trainY, outputs, layers, weights, biases, mome
 
     return weights, biases, momentums
 
+def dropout_node_indices(weights, biases, momentums, dropout_rate, num_layers):
+
+    dropped_indices = dict()
+    d_weights, d_biases, d_momentums = dict(), dict(), dict()
+
+    for layer in range(num_layers):
+        if layer == num_layers-1:
+            dropped_indices[layer] = []
+        else:
+            v = np.random.binomial(1, 1 - dropout_rate, weights[layer].shape[1])
+            dropped_indices[layer] = np.where(v == 0)[0]
+
+        d_weights[layer] = np.delete(weights[layer], dropped_indices[layer], axis=1)
+
+        d_biases[layer] = np.delete(biases[layer], dropped_indices[layer])
+
+        d_momentums[layer] = np.delete(momentums[layer], dropped_indices[layer], axis=1)
+
+        if layer > 0:
+            d_weights[layer] = np.delete(d_weights[layer], dropped_indices[layer - 1], axis=0)
+
+            d_momentums[layer] = np.delete(d_momentums[layer], dropped_indices[layer - 1], axis=0)
+
+    return d_weights, d_biases, d_momentums, dropped_indices
+
+
+def reconstruct(weights, biases, momentums, d_weights, d_biases, d_momentums, dropped_indices, num_layers):
+
+    for layer in range(num_layers-1):
+
+        if layer == 0:
+            x1 = set(range(weights[layer].shape[1]))
+            y1 = set(dropped_indices[layer])
+            retained1 = list(x1.difference(y1))
+
+            weights[layer][:, retained1] = d_weights[layer]
+            biases[layer][retained1] = d_biases[layer]
+            momentums[layer][:, retained1] = d_momentums[layer]
+
+        else:
+            x1 = set(range(weights[layer].shape[0]))
+            y1 = set(dropped_indices[layer-1])
+            retained1 = list(x1.difference(y1))
+
+            x2 = set(range(weights[layer].shape[1]))
+            y2 = set(dropped_indices[layer])
+            retained2 = list(x2.difference(y2))
+
+            weights[layer][np.ix_(retained1, retained2)] = d_weights[layer]
+            momentums[layer][np.ix_(retained1, retained2)] = d_momentums[layer]
+
+    return weights, biases, momentums
+
 
 def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
-                         num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9):
+                         num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9,
+                         dropout_rate=0.2):
 
     num_classes = len(set(trainY))
 
@@ -167,9 +221,11 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
             num_rows = layers[layer-1]
             num_cols = layers[layer]
 
-        weights[layer] = np.random.normal(0.0, 0.5, num_rows*num_cols).reshape(num_rows, num_cols)
+        weights[layer] = np.random.normal(0.0, 1.0, num_rows * num_cols).reshape(num_rows, num_cols) / math.sqrt(
+            2.0 * num_rows)
         momentums[layer] = np.zeros((num_rows, num_cols))
-        biases[layer] = np.random.normal(0.0, 0.5, num_cols)
+        biases[layer] = np.random.normal(0.0, 1.0, num_cols)
+
 
     trainX_batches, trainY_batches = generate_batches(trainX, trainY, train_batch_size)
 
@@ -181,11 +237,17 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
             trainX_batch = trainX_batches[batch]
             trainY_batch = trainY_batches[batch]
 
-            outputs = forward_pass(trainX_batch, layers, weights, biases)
+            d_weights, d_biases, d_momentums, dropped_indices = dropout_node_indices(weights, biases, momentums,
+                                                                                     dropout_rate, len(layers))
 
-            weights, biases, momentums = error_backpropagation(trainX_batch, trainY_batch, outputs, layers, weights,
-                                                               biases,
-                                                               momentums, learning_rate, momentum_rate)
+            outputs = forward_pass(trainX_batch, layers, d_weights, d_biases)
+
+            d_weights, d_biases, d_momentums = error_backpropagation(trainX_batch, trainY_batch, outputs, layers,
+                                                                     d_weights, d_biases, d_momentums,
+                                                                     learning_rate, momentum_rate)
+
+            weights, biases, momentums = reconstruct(weights, biases, momentums, d_weights, d_biases, d_momentums,
+                                                     dropped_indices, len(layers))
 
         outputs = forward_pass(trainX, layers, weights, biases)
         curr_loss = loss(outputs, trainY, len(layers))
@@ -215,7 +277,8 @@ def predict_neural_network(testX, model, type="class"):
     return outs
 
 def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
-                num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9, num_cv=5):
+                num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9,
+                dropout_rate=0.2, num_cv=5):
 
     kf = KFold(n_splits=num_cv)
 
@@ -223,21 +286,25 @@ def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
         trainX_batch, testX_batch = trainX[train_index], trainX[test_index]
         trainY_batch, testY_batch = trainY[train_index], trainY[test_index]
 
+        train_mean = np.mean(trainX_batch, axis=0)
+        train_sd = np.std(trainX_batch, axis=0)
+
+        trainX_batch = (trainX_batch-train_mean)/train_sd
+        testX_batch = (testX_batch-train_mean)/train_sd
+
         model = train_neural_network(trainX_batch, trainY_batch, hidden_layers=hidden_layers,
                                      learning_rate=learning_rate, num_epochs=num_epochs,
-                                     train_batch_size=train_batch_size, momentum_rate=momentum_rate)
+                                     train_batch_size=train_batch_size, momentum_rate=momentum_rate,
+                                     dropout_rate=dropout_rate)
 
         preds = predict_neural_network(testX_batch, model)
         print f1_score(testY_batch, preds, average='weighted')
 
 
-
 mydata = datasets.load_breast_cancer()
 
 trainX = mydata.data
-trainX = normalize(trainX, axis=0, norm='max')
-
 trainY = mydata.target
 
-train_nn_cv(trainX, trainY, hidden_layers=[15], learning_rate=0.0005, num_epochs=100,
-            train_batch_size=32, momentum_rate=0.9, num_cv=3)
+train_nn_cv(trainX, trainY, hidden_layers=[15, 10, 5], learning_rate=0.0005, num_epochs=100,
+            train_batch_size=32, momentum_rate=0.9, dropout_rate=0.2, num_cv=3)
