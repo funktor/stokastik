@@ -295,4 +295,4 @@ trainX = mydata.data
 trainY = mydata.target
 
 train_nn_cv(trainX, trainY, hidden_layers=[15, 10], learning_rate=0.05, num_epochs=100,
-            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.2, constrain_radius=3.0, num_cv=5)
+            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.0, constrain_radius=3.0, num_cv=5)
