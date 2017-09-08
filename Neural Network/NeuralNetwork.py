@@ -135,7 +135,8 @@ def error_backpropagation(trainX, trainY, outputs, layers, weights, biases, mome
                     else:
                         total_err += bp_grads[row][layer][j] * trainX[row, i]
 
-                layer_momentums[i, j] = momentum_rate * layer_momentums[i, j] + learning_rate * total_err
+                layer_momentums[i, j] = momentum_rate * layer_momentums[i, j] + learning_rate * total_err * float(
+                    1.0) / trainX.shape[0]
                 layer_weights[i, j] -= layer_momentums[i, j]
 
         for i in range(layer_weights.shape[1]):
@@ -143,7 +144,7 @@ def error_backpropagation(trainX, trainY, outputs, layers, weights, biases, mome
             for row in bp_grads:
                 total_err += bp_grads[row][layer][i]
 
-            layer_biases[i] -= learning_rate * total_err
+            layer_biases[i] -= learning_rate * total_err * float(1.0) / trainX.shape[0]
 
         weights[layer] = layer_weights
         biases[layer] = layer_biases
@@ -179,9 +180,22 @@ def scale_weights_dropout(weights, biases, dropout_rate):
 
     return scaled_weights, scaled_biases
 
+def constrain_weights(weights, biases, constrain_radius):
+
+    constrained_weights, constrained_biases = dict(), dict()
+
+    for layer in weights:
+        v1 = float(constrain_radius) / np.sqrt(np.sum(np.square(weights[layer]), axis=0))
+        v2 = float(constrain_radius) / np.sqrt(np.sum(np.square(biases[layer])))
+
+        constrained_weights[layer] = weights[layer] * v1
+        constrained_biases[layer] = biases[layer] * v2
+
+    return constrained_weights, constrained_biases
+
 def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
                          num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9,
-                         dropout_rate=0.2):
+                         dropout_rate=0.2, constrain_radius=3.0):
 
     num_classes = len(set(trainY))
 
@@ -189,6 +203,8 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
     layers = hidden_layers + [num_classes]
 
     weights, biases, momentums = initialize(layers, trainX.shape[1])
+
+    weights, biases = constrain_weights(weights, biases, constrain_radius)
 
     trainX_batches, trainY_batches = generate_batches(trainX, trainY, train_batch_size)
 
@@ -204,6 +220,8 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
 
             weights, biases, momentums = error_backpropagation(trainX_batch, trainY_batch, outputs, layers, weights,
                                                                biases, momentums, learning_rate, momentum_rate)
+
+            weights, biases = constrain_weights(weights, biases, constrain_radius)
 
         dummy_weights, dummy_biases = scale_weights_dropout(weights, biases, dropout_rate)
 
@@ -242,7 +260,7 @@ def predict_neural_network(testX, model, type="class"):
 
 def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
                 num_epochs=10, learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9,
-                dropout_rate=0.2, num_cv=5):
+                dropout_rate=0.2, constrain_radius=3.0, num_cv=5):
 
     kf = KFold(n_splits=num_cv)
 
@@ -259,7 +277,7 @@ def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
         model = train_neural_network(trainX_batch, trainY_batch, hidden_layers=hidden_layers,
                                      learning_rate=learning_rate, num_epochs=num_epochs,
                                      train_batch_size=train_batch_size, momentum_rate=momentum_rate,
-                                     dropout_rate=dropout_rate)
+                                     dropout_rate=dropout_rate, constrain_radius=constrain_radius)
 
         preds_train = predict_neural_network(trainX_batch, model)
         preds_test = predict_neural_network(testX_batch, model)
@@ -276,5 +294,5 @@ mydata = datasets.load_breast_cancer()
 trainX = mydata.data
 trainY = mydata.target
 
-train_nn_cv(trainX, trainY, hidden_layers=[15, 10], learning_rate=0.0005, num_epochs=100,
-            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.2, num_cv=5)
+train_nn_cv(trainX, trainY, hidden_layers=[15, 10], learning_rate=0.05, num_epochs=100,
+            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.2, constrain_radius=3.0, num_cv=5)
