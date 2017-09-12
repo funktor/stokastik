@@ -39,11 +39,11 @@ def output_layer_activation_softmax(inputs):
     fn_each = lambda x: math.exp(x) if x <= 5 else math.exp(5)
     vectorize = np.vectorize(fn_each)
 
-    inputs = inputs - np.mean(inputs)
+    inputs = (inputs.T - np.mean(inputs, axis=1)).T
 
     out = vectorize(inputs)
 
-    return out/np.sum(out)
+    return (out.T/np.sum(out, axis=1)).T
 
 def output_layer_grad_softmax(pred_outs, true_outs):
     fn_each = lambda x, y: x - y
@@ -70,11 +70,9 @@ def loss_cross_entropy(preds, actuals):
     return np.sum(vectorize(preds, actuals))
 
 def loss(outputs, targets, num_layers):
-    total_loss = 0.0
 
-    for row in outputs:
-        predictions = outputs[row][num_layers-1]
-        total_loss += loss_cross_entropy(predictions, targets[row,])
+    predictions = outputs[num_layers - 1]
+    total_loss = loss_cross_entropy(predictions, targets)
 
     return total_loss
 
@@ -83,20 +81,21 @@ def forward_pass(trainX, layers, weights, biases, dropout_rate):
     nested_dict = lambda: defaultdict(nested_dict)
     outputs = nested_dict()
 
-    for row in range(trainX.shape[0]):
-        input = trainX[row,]
+    curr_input = trainX
 
-        for layer in range(len(layers)):
-            weight_matrix = weights[layer].T
-            node_inp = weight_matrix.dot(input) + biases[layer]
+    for layer in range(len(layers)):
+        linear_inp = curr_input.dot(weights[layer]) + biases[layer]
 
-            if layer == len(layers)-1:
-                outputs[row][layer] = output_layer_activation_softmax(node_inp)
-            else:
-                v = np.random.binomial(1, 1 - dropout_rate, weights[layer].shape[1])
-                outputs[row][layer] = hidden_layer_activation_relu(node_inp) * v
+        if layer == len(layers) - 1:
+            outputs[layer] = output_layer_activation_softmax(linear_inp)
+        else:
+            binomial_mat = np.zeros(shape=(trainX.shape[0], weights[layer].shape[1]))
+            for row in range(trainX.shape[0]):
+                binomial_mat[row,] = np.random.binomial(1, 1 - dropout_rate, weights[layer].shape[1])
 
-            input = outputs[row][layer]
+            outputs[layer] = hidden_layer_activation_relu(linear_inp) * binomial_mat
+
+        curr_input = outputs[layer]
 
     return outputs
 
@@ -107,48 +106,27 @@ def error_backpropagation(trainX, trainY, outputs, layers, weights, biases, mome
 
     for layer in reversed(range(len(layers))):
 
-        layer_weights = weights[layer]
-        layer_biases = biases[layer]
-        layer_momentums = momentums[layer]
+        if layer == len(layers) - 1:
+            bp_grads[layer] = output_layer_grad_softmax(outputs[layer], trainY)
+        else:
+            bp_grads[layer] = hidden_layer_grad_relu(outputs[layer])
 
-        for row in outputs:
-            if layer == len(layers) - 1:
-                bp_grads[row][layer] = output_layer_grad_softmax(outputs[row][layer], trainY[row,])
-            else:
-                bp_grads[row][layer] = hidden_layer_grad_relu(outputs[row][layer])
+            next_layer_weights = weights[layer + 1]
 
-                next_layer_weights = weights[layer + 1]
+            for i in range(next_layer_weights.shape[0]):
+                total_grad = np.sum(bp_grads[layer + 1] * next_layer_weights[i, ], axis=1)
 
-                for i in range(next_layer_weights.shape[0]):
-                    total_grad = 0.0
-                    for j in range(next_layer_weights.shape[1]):
-                        total_grad += bp_grads[row][layer+1][j] * next_layer_weights[i, j]
+                bp_grads[layer][:, i] *= total_grad
 
-                    bp_grads[row][layer][i] *= total_grad
+        if layer > 0:
+            total_err = outputs[layer - 1].T.dot(bp_grads[layer])
+        else:
+            total_err = trainX.T.dot(bp_grads[layer])
 
-        for i in range(layer_weights.shape[0]):
-            for j in range(layer_weights.shape[1]):
-                total_err = 0.0
-                for row in bp_grads:
-                    if layer > 0:
-                        total_err += bp_grads[row][layer][j] * outputs[row][layer - 1][i]
-                    else:
-                        total_err += bp_grads[row][layer][j] * trainX[row, i]
+        momentums[layer] = momentum_rate * momentums[layer] + learning_rate * total_err * float(1.0) / trainX.shape[0]
+        weights[layer] -= momentums[layer]
 
-                layer_momentums[i, j] = momentum_rate * layer_momentums[i, j] + learning_rate * total_err * float(
-                    1.0) / trainX.shape[0]
-                layer_weights[i, j] -= layer_momentums[i, j]
-
-        for i in range(layer_weights.shape[1]):
-            total_err = 0.0
-            for row in bp_grads:
-                total_err += bp_grads[row][layer][i]
-
-            layer_biases[i] -= learning_rate * total_err * float(1.0) / trainX.shape[0]
-
-        weights[layer] = layer_weights
-        biases[layer] = layer_biases
-        momentums[layer] = layer_momentums
+        biases[layer] -= learning_rate * np.sum(bp_grads[layer], axis=0) * float(1.0) / trainX.shape[0]
 
     return weights, biases, momentums
 
@@ -226,10 +204,11 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
         dummy_weights, dummy_biases = scale_weights_dropout(weights, biases, dropout_rate)
 
         outputs = forward_pass(trainX, layers, dummy_weights, dummy_biases, dropout_rate)
+
         curr_loss = loss(outputs, trainY, len(layers))
 
         cond_1 = curr_loss <= trainX.shape[0] * (-math.log(0.9, 2))
-        cond_2 = len(losses) > 2 and curr_loss > losses[-1] and losses[-1] > losses[-2] and losses[-2] > losses[-3]
+        cond_2 = len(losses) > 2 and curr_loss > losses[-1] > losses[-2] > losses[-3]
 
         if epoch > 0 and (cond_1 or cond_2):
             break
@@ -247,14 +226,14 @@ def predict_neural_network(testX, model, type="class"):
     weights, biases, layers, dropout_rate = model
     outputs = forward_pass(testX, layers, weights, biases, dropout_rate)
 
+    preds = outputs[len(layers) - 1]
     outs = []
 
-    for row in outputs:
-        preds = outputs[row][len(layers)-1]
+    for row in range(preds.shape[0]):
         if type == "class":
-            outs += [np.argmax(preds)]
+            outs += [np.argmax(preds[row,])]
         else:
-            outs += [preds]
+            outs += [preds[row,]]
 
     return outs
 
@@ -295,4 +274,4 @@ trainX = mydata.data
 trainY = mydata.target
 
 train_nn_cv(trainX, trainY, hidden_layers=[15, 10], learning_rate=0.05, num_epochs=100,
-            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.0, constrain_radius=3.0, num_cv=5)
+            train_batch_size=50, momentum_rate=0.9, dropout_rate=0.1, constrain_radius=3.0, num_cv=5)
