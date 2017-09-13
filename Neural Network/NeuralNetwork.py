@@ -352,10 +352,10 @@ def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
         trainY_batch, testY_batch = trainY[train_index], trainY[test_index]
 
         train_mean = np.mean(trainX_batch, axis=0)
-        train_sd = np.std(trainX_batch, axis=0)
+        train_var = np.var(trainX_batch, axis=0)
 
-        trainX_batch = (trainX_batch - train_mean) / train_sd
-        testX_batch = (testX_batch - train_mean) / train_sd
+        trainX_batch = (trainX_batch - train_mean) * (train_var + 0.5)**-0.5
+        testX_batch = (testX_batch - train_mean) * (train_var + 0.5)**-0.5
 
         model = train_neural_network(trainX_batch, trainY_batch, hidden_layers=hidden_layers,
                                      weights_learning_rate=weights_learning_rate, norm_learning_rate=norm_learning_rate,
@@ -373,10 +373,10 @@ def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
         print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
 
 
-mydata = datasets.load_breast_cancer()
+mydata = datasets.load_digits()
 
 trainX = mydata.data
 trainY = mydata.target
 
-train_nn_cv(trainX, trainY, hidden_layers=[15, 10], weights_learning_rate=0.5, norm_learning_rate=0.5, num_epochs=100,
+train_nn_cv(trainX, trainY, hidden_layers=[40, 20], weights_learning_rate=0.5, norm_learning_rate=0.5, num_epochs=100,
             train_batch_size=50, momentum_rate=0.95, dropout_rate=0.0, constrain_radius=3.0, epsilon=1.0, num_cv=5)
