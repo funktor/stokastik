@@ -395,8 +395,6 @@ def train_nn_cv(trainX, trainY,
 
     kf = KFold(n_splits=num_cv)
 
-    counter = 0
-
     for train_index, test_index in kf.split(trainX):
 
         trainX_batch, testX_batch = trainX[train_index], trainX[test_index]
@@ -418,14 +416,13 @@ def train_nn_cv(trainX, trainY,
         preds_train = predict_neural_network(trainX_batch, model)
         preds_test = predict_neural_network(testX_batch, model)
 
-        print "CV Number = ", counter
         print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
         print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
 
         print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
         print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
 
-        counter += 1
+        print ""
 
 
 mydata = datasets.load_digits()
