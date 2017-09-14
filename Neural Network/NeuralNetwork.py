@@ -7,6 +7,17 @@ from sklearn.metrics import f1_score, accuracy_score
 from sklearn.model_selection import KFold
 
 
+def standardize_mean_var(mydata, mean=None, var=None):
+
+    if mean is None and var is None:
+        mean = np.mean(mydata, axis=0)
+        var = np.var(mydata, axis=0)
+
+    std_data = (mydata - mean) * (var + 0.5) ** -0.5
+
+    return std_data, mean, var
+
+
 def one_hot_encoding(classes):
     num_classes = len(set(classes))
     targets = np.array([classes]).reshape(-1)
@@ -79,7 +90,8 @@ def loss_cross_entropy(preds, actuals):
     return np.sum(vectorize(preds, actuals))
 
 
-def loss(outputs, targets, num_layers):
+def loss(outputs, targets):
+    num_layers = len(outputs)
 
     predictions = outputs[num_layers - 1]
     total_loss = loss_cross_entropy(predictions, targets)
@@ -87,7 +99,7 @@ def loss(outputs, targets, num_layers):
     return total_loss
 
 
-def train_forward_pass(trainX, layers, weights, biases, gamma, beta, epsilon, dropout_rate):
+def train_forward_pass(trainX, weights, biases, gamma, beta, dropout_rate):
 
     nested_dict = lambda: defaultdict(nested_dict)
     outputs, linear_inp, scaled_linear_inp = nested_dict(), nested_dict(), nested_dict()
@@ -96,17 +108,15 @@ def train_forward_pass(trainX, layers, weights, biases, gamma, beta, epsilon, dr
 
     curr_input = trainX
 
-    for layer in range(len(layers)):
+    for layer in range(len(weights)):
         linear_inp[layer] = curr_input.dot(weights[layer]) + biases[layer]
 
-        mean_linear_inp[layer] = np.mean(linear_inp[layer], axis=0)
-        var_linear_inp[layer] = np.var(linear_inp[layer], axis=0)
+        scaled_linear_inp[layer], mean_linear_inp[layer], var_linear_inp[layer] = standardize_mean_var(
+            linear_inp[layer])
 
-        scaled_linear_inp[layer] = (linear_inp[layer] - mean_linear_inp[layer]) * (var_linear_inp[
-                                                                                       layer] + epsilon) ** -0.5
         shifted_inp = gamma[layer] * scaled_linear_inp[layer] + beta[layer]
 
-        if layer == len(layers) - 1:
+        if layer == len(weights) - 1:
             outputs[layer] = output_layer_activation_softmax(shifted_inp)
         else:
             binomial_mat = np.zeros(shape=(trainX.shape[0], weights[layer].shape[1]))
@@ -121,21 +131,22 @@ def train_forward_pass(trainX, layers, weights, biases, gamma, beta, epsilon, dr
     return outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp
 
 
-def test_forward_pass(testX, layers, weights, biases, gamma, beta, epsilon, mean_linear_inp=dict(),
-                      var_linear_inp=dict()):
+def test_forward_pass(testX, weights, biases, gamma, beta, mean_linear_inp, var_linear_inp):
 
     nested_dict = lambda: defaultdict(nested_dict)
     outputs = nested_dict()
 
     curr_input = testX
 
-    for layer in range(len(layers)):
+    for layer in range(len(weights)):
         linear_inp = curr_input.dot(weights[layer]) + biases[layer]
 
-        scaled_linear_inp = (linear_inp - mean_linear_inp[layer]) * (var_linear_inp[layer] + epsilon) ** -0.5
+        scaled_linear_inp, _, _ = standardize_mean_var(linear_inp, mean=mean_linear_inp[layer],
+                                                       var=var_linear_inp[layer])
+
         shifted_inp = gamma[layer] * scaled_linear_inp + beta[layer]
 
-        if layer == len(layers) - 1:
+        if layer == len(weights) - 1:
             outputs[layer] = output_layer_activation_softmax(shifted_inp)
         else:
             outputs[layer] = hidden_layer_activation_relu(shifted_inp)
@@ -145,21 +156,24 @@ def test_forward_pass(testX, layers, weights, biases, gamma, beta, epsilon, mean
     return outputs
 
 
-def error_backpropagation(trainX, trainY, outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp,
-                          layers, weights, biases, momentums, gamma, beta, epsilon, norm_learning_rate,
-                          weights_learning_rate, momentum_rate):
+def error_backpropagation(trainX, trainY,
+                          outputs,
+                          linear_inp, scaled_linear_inp,
+                          mean_linear_inp, var_linear_inp,
+                          weights, biases, momentums, gamma, beta,
+                          bn_learning_rate, weights_learning_rate, momentum_rate):
 
     nested_dict = lambda: defaultdict(nested_dict)
     bp_grads_1, bp_grads_2 = nested_dict(), nested_dict()
 
     inverse_num_examples = float(1.0) / trainX.shape[0]
 
-    for layer in reversed(range(len(layers))):
+    for layer in reversed(range(len(weights))):
 
-        denom = (var_linear_inp[layer] + epsilon) ** -0.5
+        denom = (var_linear_inp[layer] + 0.5) ** -0.5
         numer = linear_inp[layer] - mean_linear_inp[layer]
 
-        if layer == len(layers) - 1:
+        if layer == len(weights) - 1:
             bp_grads_2[layer] = output_layer_grad_softmax(outputs[layer], trainY)
         else:
             bp_grads_2[layer] = hidden_layer_grad_relu(outputs[layer])
@@ -184,9 +198,9 @@ def error_backpropagation(trainX, trainY, outputs, linear_inp, scaled_linear_inp
         else:
             total_err = trainX.T.dot(bp_grads_1[layer])
 
-        beta[layer] -= norm_learning_rate * np.sum(bp_grads_2[layer], axis=0) * inverse_num_examples
+        beta[layer] -= bn_learning_rate * np.sum(bp_grads_2[layer], axis=0) * inverse_num_examples
 
-        gamma[layer] -= norm_learning_rate * np.sum(bp_grads_2[layer] * scaled_linear_inp[layer],
+        gamma[layer] -= bn_learning_rate * np.sum(bp_grads_2[layer] * scaled_linear_inp[layer],
                                                     axis=0) * inverse_num_examples
 
         momentums[layer] = momentum_rate * momentums[layer] + weights_learning_rate * total_err * inverse_num_examples
@@ -244,10 +258,15 @@ def constrain_weights(weights, biases, constrain_radius):
     return constrained_weights, constrained_biases
 
 
-def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
-                         num_epochs=10, weights_learning_rate=0.0005, norm_learning_rate=0.0005,
-                         train_batch_size=32, momentum_rate=0.9,
-                         dropout_rate=0.2, constrain_radius=3.0, epsilon=0.05):
+def train_neural_network(trainX, trainY,
+                         hidden_layers=[5, 2],
+                         num_epochs=10,
+                         weights_learning_rate=0.5,
+                         bn_learning_rate=0.5,
+                         train_batch_size=32,
+                         momentum_rate=0.9,
+                         dropout_rate=0.2,
+                         constrain_radius=3.0):
 
     num_classes = len(set(trainY))
 
@@ -277,17 +296,28 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
             trainX_batch = trainX_batches[batch]
             trainY_batch = trainY_batches[batch]
 
-            train_data = train_forward_pass(trainX_batch, layers, weights, biases, gamma, beta, epsilon, dropout_rate)
+            fwd_pass_data = train_forward_pass(trainX_batch, weights, biases, gamma, beta, dropout_rate)
 
-            outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp = train_data
+            outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp = fwd_pass_data
 
             for layer in range(len(layers)):
                 expected_mean_linear_inp[layer] += mean_linear_inp[layer]
                 expected_var_linear_inp[layer] += var_linear_inp[layer]
 
-            backprop = error_backpropagation(trainX_batch, trainY_batch, outputs, linear_inp, scaled_linear_inp,
-                                             mean_linear_inp, var_linear_inp, layers, weights, biases, momentums, gamma,
-                                             beta, epsilon, norm_learning_rate, weights_learning_rate, momentum_rate)
+            backprop = error_backpropagation(trainX_batch, trainY_batch,
+                                             outputs=outputs,
+                                             linear_inp=linear_inp,
+                                             scaled_linear_inp=scaled_linear_inp,
+                                             mean_linear_inp=mean_linear_inp,
+                                             var_linear_inp=var_linear_inp,
+                                             weights=weights,
+                                             biases=biases,
+                                             momentums=momentums,
+                                             gamma=gamma,
+                                             beta=beta,
+                                             bn_learning_rate=bn_learning_rate,
+                                             weights_learning_rate=weights_learning_rate,
+                                             momentum_rate=momentum_rate)
 
             weights, biases, momentums, gamma, beta = backprop
 
@@ -301,10 +331,15 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
 
         dummy_weights, dummy_biases = scale_weights_dropout(weights, biases, dropout_rate)
 
-        outputs = test_forward_pass(trainX, layers, dummy_weights, dummy_biases, gamma, beta, epsilon,
-                                    mean_linear_inp=exp_mean_linear_inp, var_linear_inp=exp_var_linear_inp)
+        outputs = test_forward_pass(trainX,
+                                    weights=dummy_weights,
+                                    biases=dummy_biases,
+                                    gamma=gamma,
+                                    beta=beta,
+                                    mean_linear_inp=exp_mean_linear_inp,
+                                    var_linear_inp=exp_var_linear_inp)
 
-        curr_loss = loss(outputs, trainY, len(layers))
+        curr_loss = loss(outputs, trainY)
 
         cond_1 = curr_loss <= trainX.shape[0] * (-math.log(0.9, 2))
         cond_2 = len(losses) > 2 and curr_loss > losses[-1] > losses[-2] > losses[-3]
@@ -316,19 +351,26 @@ def train_neural_network(trainX, trainY, hidden_layers=[5, 2],
 
     weights, biases = scale_weights_dropout(weights, biases, dropout_rate)
 
-    model = (weights, biases, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp, epsilon, layers)
+    model = (weights, biases, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp)
 
     return model
 
 
 def predict_neural_network(testX, model, type="class"):
 
-    weights, biases, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp, epsilon, layers = model
+    weights, biases, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp = model
 
-    outputs = test_forward_pass(testX, layers, weights, biases, gamma, beta, epsilon,
-                                mean_linear_inp=exp_mean_linear_inp, var_linear_inp=exp_var_linear_inp)
+    num_layers = len(weights)
 
-    preds = outputs[len(layers) - 1]
+    outputs = test_forward_pass(testX,
+                                weights=weights,
+                                biases=biases,
+                                gamma=gamma,
+                                beta=beta,
+                                mean_linear_inp=exp_mean_linear_inp,
+                                var_linear_inp=exp_var_linear_inp)
+
+    preds = outputs[num_layers - 1]
     outs = []
 
     for row in range(preds.shape[0]):
@@ -340,37 +382,50 @@ def predict_neural_network(testX, model, type="class"):
     return outs
 
 
-def train_nn_cv(trainX, trainY, hidden_layers=[5, 2],
-                num_epochs=10, weights_learning_rate=0.0005, norm_learning_rate=0.0005, train_batch_size=32, momentum_rate=0.9,
-                dropout_rate=0.2, constrain_radius=3.0, epsilon=0.05, num_cv=5):
+def train_nn_cv(trainX, trainY,
+                hidden_layers=[5, 2],
+                num_epochs=10,
+                weights_learning_rate=0.0005,
+                bn_learning_rate=0.0005,
+                train_batch_size=32,
+                momentum_rate=0.9,
+                dropout_rate=0.2,
+                constrain_radius=3.0,
+                num_cv=5):
 
     kf = KFold(n_splits=num_cv)
+
+    counter = 0
 
     for train_index, test_index in kf.split(trainX):
 
         trainX_batch, testX_batch = trainX[train_index], trainX[test_index]
         trainY_batch, testY_batch = trainY[train_index], trainY[test_index]
 
-        train_mean = np.mean(trainX_batch, axis=0)
-        train_var = np.var(trainX_batch, axis=0)
+        trainX_batch, mean, var = standardize_mean_var(trainX_batch)
+        testX_batch, _, _ = standardize_mean_var(testX_batch, mean, var)
 
-        trainX_batch = (trainX_batch - train_mean) * (train_var + 0.5)**-0.5
-        testX_batch = (testX_batch - train_mean) * (train_var + 0.5)**-0.5
-
-        model = train_neural_network(trainX_batch, trainY_batch, hidden_layers=hidden_layers,
-                                     weights_learning_rate=weights_learning_rate, norm_learning_rate=norm_learning_rate,
+        model = train_neural_network(trainX_batch, trainY_batch,
+                                     hidden_layers=hidden_layers,
+                                     weights_learning_rate=weights_learning_rate,
+                                     bn_learning_rate=bn_learning_rate,
                                      num_epochs=num_epochs,
-                                     train_batch_size=train_batch_size, momentum_rate=momentum_rate,
-                                     dropout_rate=dropout_rate, constrain_radius=constrain_radius, epsilon=epsilon)
+                                     train_batch_size=train_batch_size,
+                                     momentum_rate=momentum_rate,
+                                     dropout_rate=dropout_rate,
+                                     constrain_radius=constrain_radius)
 
         preds_train = predict_neural_network(trainX_batch, model)
         preds_test = predict_neural_network(testX_batch, model)
 
+        print "CV Number = ", counter
         print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
         print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
 
         print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
         print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
+
+        counter += 1
 
 
 mydata = datasets.load_digits()
@@ -378,5 +433,13 @@ mydata = datasets.load_digits()
 trainX = mydata.data
 trainY = mydata.target
 
-train_nn_cv(trainX, trainY, hidden_layers=[40, 20], weights_learning_rate=0.5, norm_learning_rate=0.5, num_epochs=100,
-            train_batch_size=50, momentum_rate=0.95, dropout_rate=0.0, constrain_radius=3.0, epsilon=1.0, num_cv=5)
+train_nn_cv(trainX, trainY,
+            hidden_layers=[50, 30],
+            weights_learning_rate=0.1,
+            bn_learning_rate=0.5,
+            num_epochs=100,
+            train_batch_size=32,
+            momentum_rate=0.95,
+            dropout_rate=0.0,
+            constrain_radius=3.0,
+            num_cv=5)
