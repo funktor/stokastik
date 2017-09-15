@@ -51,7 +51,7 @@ def hidden_layer_activation_relu(inputs):
     return vectorize(inputs)
 
 
-def output_layer_activation_softmax(inputs):
+def output_layer_activation_class_softmax(inputs):
     fn_each = lambda x: math.exp(x) if x <= 5 else math.exp(5)
     vectorize = np.vectorize(fn_each)
 
@@ -62,7 +62,21 @@ def output_layer_activation_softmax(inputs):
     return (out.T/np.sum(out, axis=1)).T
 
 
-def output_layer_grad_softmax(pred_outs, true_outs):
+def output_layer_grad_class_softmax(pred_outs, true_outs):
+    fn_each = lambda x, y: x - y
+    vectorize = np.vectorize(fn_each)
+
+    return vectorize(pred_outs, true_outs)
+
+
+def output_layer_activation_reg(inputs):
+    fn_each = lambda x: x
+    vectorize = np.vectorize(fn_each)
+
+    return vectorize(inputs)
+
+
+def output_layer_grad_reg(pred_outs, true_outs):
     fn_each = lambda x, y: x - y
     vectorize = np.vectorize(fn_each)
 
@@ -90,7 +104,14 @@ def loss_cross_entropy(preds, actuals):
     return np.sum(vectorize(preds, actuals))
 
 
-def loss(outputs, targets):
+def loss_mse(preds, actuals):
+    fn_each = lambda x, y: 0.5 * (x - y)**2
+    vectorize = np.vectorize(fn_each)
+
+    return np.sum(vectorize(preds, actuals))
+
+
+def loss_class(outputs, targets):
     num_layers = len(outputs)
 
     predictions = outputs[num_layers - 1]
@@ -99,7 +120,16 @@ def loss(outputs, targets):
     return total_loss
 
 
-def train_forward_pass(trainX, weights, biases, gamma, beta, dropout_rate):
+def loss_reg(outputs, targets):
+    num_layers = len(outputs)
+
+    predictions = outputs[num_layers - 1]
+    total_loss = loss_mse(predictions, targets)
+
+    return total_loss
+
+
+def train_forward_pass(trainX, weights, biases, gamma, beta, dropout_rate, type):
 
     nested_dict = lambda: defaultdict(nested_dict)
     outputs, linear_inp, scaled_linear_inp = nested_dict(), nested_dict(), nested_dict()
@@ -117,7 +147,10 @@ def train_forward_pass(trainX, weights, biases, gamma, beta, dropout_rate):
         shifted_inp = gamma[layer] * scaled_linear_inp[layer] + beta[layer]
 
         if layer == len(weights) - 1:
-            outputs[layer] = output_layer_activation_softmax(shifted_inp)
+            if type == "classification":
+                outputs[layer] = output_layer_activation_class_softmax(shifted_inp)
+            else:
+                outputs[layer] = output_layer_activation_reg(shifted_inp)
         else:
             binomial_mat = np.zeros(shape=(trainX.shape[0], weights[layer].shape[1]))
 
@@ -131,7 +164,7 @@ def train_forward_pass(trainX, weights, biases, gamma, beta, dropout_rate):
     return outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp
 
 
-def test_forward_pass(testX, weights, biases, gamma, beta, mean_linear_inp, var_linear_inp):
+def test_forward_pass(testX, weights, biases, gamma, beta, mean_linear_inp, var_linear_inp, type):
 
     nested_dict = lambda: defaultdict(nested_dict)
     outputs = nested_dict()
@@ -147,7 +180,10 @@ def test_forward_pass(testX, weights, biases, gamma, beta, mean_linear_inp, var_
         shifted_inp = gamma[layer] * scaled_linear_inp + beta[layer]
 
         if layer == len(weights) - 1:
-            outputs[layer] = output_layer_activation_softmax(shifted_inp)
+            if type == "classification":
+                outputs[layer] = output_layer_activation_class_softmax(shifted_inp)
+            else:
+                outputs[layer] = output_layer_activation_reg(shifted_inp)
         else:
             outputs[layer] = hidden_layer_activation_relu(shifted_inp)
 
@@ -161,7 +197,8 @@ def error_backpropagation(trainX, trainY,
                           linear_inp, scaled_linear_inp,
                           mean_linear_inp, var_linear_inp,
                           weights, biases, momentums, gamma, beta,
-                          bn_learning_rate, weights_learning_rate, momentum_rate):
+                          bn_learning_rate, weights_learning_rate, momentum_rate,
+                          type):
 
     nested_dict = lambda: defaultdict(nested_dict)
     bp_grads_1, bp_grads_2 = nested_dict(), nested_dict()
@@ -174,7 +211,10 @@ def error_backpropagation(trainX, trainY,
         numer = linear_inp[layer] - mean_linear_inp[layer]
 
         if layer == len(weights) - 1:
-            bp_grads_2[layer] = output_layer_grad_softmax(outputs[layer], trainY)
+            if type == "classification":
+                bp_grads_2[layer] = output_layer_grad_class_softmax(outputs[layer], trainY)
+            else:
+                bp_grads_2[layer] = output_layer_grad_reg(outputs[layer], trainY)
         else:
             bp_grads_2[layer] = hidden_layer_grad_relu(outputs[layer])
 
@@ -266,13 +306,15 @@ def train_neural_network(trainX, trainY,
                          train_batch_size=32,
                          momentum_rate=0.9,
                          dropout_rate=0.2,
-                         constrain_radius=3.0):
+                         constrain_radius=3.0,
+                         type="classification"):
 
-    num_classes = len(set(trainY))
-
-    trainY = one_hot_encoding(trainY)
-
-    layers = hidden_layers + [num_classes]
+    if type == "classification":
+        layers = hidden_layers + [len(set(trainY))]
+        trainY = one_hot_encoding(trainY)
+    else:
+        layers = hidden_layers + [1]
+        trainY = trainY.reshape(len(trainY), -1)
 
     weights, biases, momentums, gamma, beta = initialize(layers, trainX.shape[1])
 
@@ -296,7 +338,7 @@ def train_neural_network(trainX, trainY,
             trainX_batch = trainX_batches[batch]
             trainY_batch = trainY_batches[batch]
 
-            fwd_pass_data = train_forward_pass(trainX_batch, weights, biases, gamma, beta, dropout_rate)
+            fwd_pass_data = train_forward_pass(trainX_batch, weights, biases, gamma, beta, dropout_rate, type)
 
             outputs, linear_inp, scaled_linear_inp, mean_linear_inp, var_linear_inp = fwd_pass_data
 
@@ -317,7 +359,8 @@ def train_neural_network(trainX, trainY,
                                              beta=beta,
                                              bn_learning_rate=bn_learning_rate,
                                              weights_learning_rate=weights_learning_rate,
-                                             momentum_rate=momentum_rate)
+                                             momentum_rate=momentum_rate,
+                                             type=type)
 
             weights, biases, momentums, gamma, beta = backprop
 
@@ -337,11 +380,16 @@ def train_neural_network(trainX, trainY,
                                     gamma=gamma,
                                     beta=beta,
                                     mean_linear_inp=exp_mean_linear_inp,
-                                    var_linear_inp=exp_var_linear_inp)
+                                    var_linear_inp=exp_var_linear_inp,
+                                    type=type)
 
-        curr_loss = loss(outputs, trainY)
+        if type == "classification":
+            curr_loss = loss_class(outputs, trainY)
+            cond_1 = curr_loss <= trainX.shape[0] * (-math.log(0.9, 2))
+        else:
+            curr_loss = loss_reg(outputs, trainY)
+            cond_1 = curr_loss <= trainX.shape[0] * 0.001
 
-        cond_1 = curr_loss <= trainX.shape[0] * (-math.log(0.9, 2))
         cond_2 = len(losses) > 2 and curr_loss > losses[-1] > losses[-2] > losses[-3]
 
         if epoch > 0 and (cond_1 or cond_2):
@@ -356,7 +404,7 @@ def train_neural_network(trainX, trainY,
     return model
 
 
-def predict_neural_network(testX, model, type="class"):
+def predict_neural_network(testX, model, type="classification"):
 
     weights, biases, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp = model
 
@@ -368,13 +416,14 @@ def predict_neural_network(testX, model, type="class"):
                                 gamma=gamma,
                                 beta=beta,
                                 mean_linear_inp=exp_mean_linear_inp,
-                                var_linear_inp=exp_var_linear_inp)
+                                var_linear_inp=exp_var_linear_inp,
+                                type=type)
 
     preds = outputs[num_layers - 1]
     outs = []
 
     for row in range(preds.shape[0]):
-        if type == "class":
+        if type == "classification":
             outs += [np.argmax(preds[row,])]
         else:
             outs += [preds[row,]]
@@ -391,7 +440,8 @@ def train_nn_cv(trainX, trainY,
                 momentum_rate=0.9,
                 dropout_rate=0.2,
                 constrain_radius=3.0,
-                num_cv=5):
+                num_cv=5,
+                type="classification"):
 
     kf = KFold(n_splits=num_cv)
 
@@ -411,16 +461,21 @@ def train_nn_cv(trainX, trainY,
                                      train_batch_size=train_batch_size,
                                      momentum_rate=momentum_rate,
                                      dropout_rate=dropout_rate,
-                                     constrain_radius=constrain_radius)
+                                     constrain_radius=constrain_radius,
+                                     type=type)
 
-        preds_train = predict_neural_network(trainX_batch, model)
-        preds_test = predict_neural_network(testX_batch, model)
+        preds_train = predict_neural_network(trainX_batch, model, type=type)
+        preds_test = predict_neural_network(testX_batch, model, type=type)
 
-        print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
-        print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
+        if type == "classification":
+            print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
+            print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
 
-        print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
-        print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
+            print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
+            print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
+        else:
+            print preds_test
+            print loss_mse(preds_test, testY_batch)
 
         print ""
 
@@ -431,10 +486,10 @@ trainX = mydata.data
 trainY = mydata.target
 
 train_nn_cv(trainX, trainY,
-            hidden_layers=[50, 30],
-            weights_learning_rate=0.1,
+            hidden_layers=[10],
+            weights_learning_rate=0.5,
             bn_learning_rate=0.5,
-            num_epochs=100,
+            num_epochs=1000,
             train_batch_size=32,
             momentum_rate=0.95,
             dropout_rate=0.0,
