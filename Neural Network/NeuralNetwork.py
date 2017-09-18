@@ -201,11 +201,11 @@ def error_backpropagation(trainX, trainY,
 
         a = bp_grads_2[layer] * gamma[layer]
 
-        b = np.sum(a * (-0.5 * (denom ** 3)) * numer, axis=0)
+        b = np.sum(a * (-0.5 * (denom ** 3.0)) * numer, axis=0)
 
-        c = np.sum(-a * denom, axis=0) + b * np.sum(-2 * numer) * inverse_num_examples
+        c = np.sum(-a * denom, axis=0) + b * np.sum(-2.0 * numer) * inverse_num_examples
 
-        bp_grads_1[layer] = a * denom + b * 2 * numer * inverse_num_examples + c * inverse_num_examples
+        bp_grads_1[layer] = a * denom + b * 2.0 * numer * inverse_num_examples + c * inverse_num_examples
 
         if layer > 0:
             total_err = outputs[layer - 1].T.dot(bp_grads_1[layer])
@@ -366,16 +366,15 @@ def train_neural_network(trainX, trainY,
     return model
 
 
-def train_autoencoder(trainX, trainY,
+def train_autoencoder(trainX,
                       hidden_layers,
                       num_epochs=10,
-                      train_batch_size=32,
                       weights_learning_rate=0.5,
                       bn_learning_rate=0.5,
                       momentum_rate=0.9,
                       dropout_rate=0.0):
 
-    layers = hidden_layers + [len(set(trainY))]
+    layers = hidden_layers + [trainX.shape[1]]
 
     weights, biases, momentums, gamma, beta = initialize(layers, trainX.shape[1])
 
@@ -414,12 +413,12 @@ def train_autoencoder(trainX, trainY,
 
         curr_input = outputs[0]
 
-    model = train_neural_network(trainX, trainY,
+    model = train_neural_network(trainX, trainX,
                                  hidden_layers=hidden_layers,
-                                 num_epochs=num_epochs,
+                                 num_epochs=10,
                                  weights_learning_rate=weights_learning_rate,
                                  bn_learning_rate=bn_learning_rate,
-                                 train_batch_size=train_batch_size,
+                                 train_batch_size=trainX.shape[0],
                                  momentum_rate=momentum_rate,
                                  dropout_rate=dropout_rate,
                                  ini_weights=weights,
@@ -427,7 +426,7 @@ def train_autoencoder(trainX, trainY,
                                  ini_momentums=momentums,
                                  ini_gamma=gamma,
                                  ini_beta=beta,
-                                 type="classification")
+                                 type="regression")
 
     weights, biases, momentums, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp = model
 
@@ -450,13 +449,11 @@ def train_autoencoder_logistic_reg(trainX, trainY,
                                    num_epochs=10,
                                    weights_learning_rate=0.5,
                                    bn_learning_rate=0.5,
-                                   train_batch_size=32,
                                    momentum_rate=0.9,
                                    dropout_rate=0.2):
 
-    autoencoder = train_autoencoder(trainX, trainY,
+    autoencoder = train_autoencoder(trainX,
                                     hidden_layers=hidden_layers,
-                                    train_batch_size=train_batch_size,
                                     num_epochs=num_epochs,
                                     weights_learning_rate=weights_learning_rate,
                                     bn_learning_rate=bn_learning_rate,
@@ -598,7 +595,6 @@ autoencoder_model = train_autoencoder_logistic_reg(X_train, y_train,
                                                    weights_learning_rate=0.5,
                                                    bn_learning_rate=0.5,
                                                    num_epochs=100,
-                                                   train_batch_size=50,
                                                    momentum_rate=0.9,
                                                    dropout_rate=0.1)
 
