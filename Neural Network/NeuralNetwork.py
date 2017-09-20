@@ -233,10 +233,18 @@ def initialize(layers, num_features):
             num_rows = layers[layer - 1]
             num_cols = layers[layer]
 
-        weights[layer] = np.random.normal(0.0, 1.0, num_rows * num_cols).reshape(num_rows, num_cols) / math.sqrt(
-            2.0 * num_rows)
+        fan_in = num_rows
+
+        if layer < len(layers)-1:
+            fan_out = layers[layer + 1]
+        else:
+            fan_out = fan_in
+
+        r = 4 * math.sqrt(float(6.0) / (fan_in + fan_out))
+
+        weights[layer] = np.random.uniform(-r, r, num_rows * num_cols).reshape(num_rows, num_cols)
         momentums[layer] = np.zeros((num_rows, num_cols))
-        biases[layer] = np.random.normal(0.0, 1.0, num_cols) / math.sqrt(2.0 * num_rows)
+        biases[layer] = np.zeros(num_cols)
 
         gamma[layer] = np.ones(num_cols)
         beta[layer] = np.zeros(num_cols)
@@ -348,8 +356,8 @@ def train_neural_network(trainX, trainY,
 
         cond = len(losses) > 3 and curr_loss > losses[-1] > losses[-2] > losses[-3] > losses[-4]
 
-        if epoch > 0 and (cond):
-            break
+        if cond:
+            weights_learning_rate /= 3.0
 
         losses.append(curr_loss)
 
@@ -552,9 +560,9 @@ X_test, _, _ = standardize_mean_var(X_test, mean, var)
 
 nn_model = train_neural_network(X_train, y_train,
                                 hidden_layers=[200, 200],
-                                weights_learning_rate=0.5,
+                                weights_learning_rate=0.8,
                                 bn_learning_rate=0.9,
-                                num_epochs=100,
+                                num_epochs=200,
                                 train_batch_size=50,
                                 momentum_rate=0.95,
                                 dropout_rate=0.2,
