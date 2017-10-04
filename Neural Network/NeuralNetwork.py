@@ -14,7 +14,7 @@ def standardize_mean_var(mydata, mean=None, var=None):
         mean = np.mean(mydata, axis=0)
         var = np.var(mydata, axis=0)
 
-    std_data = (mydata - mean) * (var + 0.5) ** -0.5
+    std_data = (mydata - mean) * (var + 1e-5) ** -0.5
 
     return std_data, mean, var
 
@@ -48,7 +48,6 @@ def hidden_layer_activation_relu(inputs):
 
 def output_layer_activation_class_softmax(inputs):
     inputs = (inputs.T - np.mean(inputs, axis=1)).T
-    inputs[inputs > 5.0] = 5.0
 
     out = np.exp(inputs)
 
@@ -181,7 +180,7 @@ def error_backpropagation(trainX, trainY,
 
     for layer in reversed(range(len(weights))):
 
-        denom = (var_linear_inp[layer] + 0.5) ** -0.5
+        denom = (var_linear_inp[layer] + 1e-5) ** -0.5
         numer = linear_inp[layer] - mean_linear_inp[layer]
 
         if layer == len(weights) - 1:
@@ -240,7 +239,7 @@ def initialize(layers, num_features):
         else:
             fan_out = fan_in
 
-        r = 4 * math.sqrt(float(6.0) / (fan_in + fan_out))
+        r = 4.0 * math.sqrt(float(6.0) / (fan_in + fan_out))
 
         weights[layer] = np.random.uniform(-r, r, num_rows * num_cols).reshape(num_rows, num_cols)
         momentums[layer] = np.zeros((num_rows, num_cols))
@@ -280,6 +279,8 @@ def train_neural_network(trainX, trainY,
 
     if type == "classification":
         trainY = one_hot_encoding(trainY)
+    else:
+        trainY = np.array(trainY).reshape(len(trainY), -1)
 
     layers = hidden_layers + [trainY.shape[1]]
 
@@ -336,7 +337,11 @@ def train_neural_network(trainX, trainY,
 
         for layer in range(len(layers)):
             exp_mean_linear_inp[layer] = expected_mean_linear_inp[layer] / len(trainX_batches)
-            exp_var_linear_inp[layer] = (float(m) / (m-1)) * expected_var_linear_inp[layer] / len(trainX_batches)
+
+            if m > 1:
+                exp_var_linear_inp[layer] = (float(m) / (m-1)) * expected_var_linear_inp[layer] / len(trainX_batches)
+            else:
+                exp_var_linear_inp[layer] = expected_var_linear_inp[layer] / len(trainX_batches)
 
         dummy_weights, dummy_biases = scale_weights_dropout(weights, biases, dropout_rate)
 
@@ -354,10 +359,10 @@ def train_neural_network(trainX, trainY,
         else:
             curr_loss = loss_reg(outputs, trainY)
 
-        cond = len(losses) > 3 and curr_loss > losses[-1] > losses[-2] > losses[-3] > losses[-4]
+        cond = len(losses) > 1 and curr_loss > losses[-1] > losses[-2]
 
         if cond:
-            weights_learning_rate /= 3.0
+            weights_learning_rate /= float(2.0)
 
         losses.append(curr_loss)
 
@@ -368,23 +373,26 @@ def train_neural_network(trainX, trainY,
     return model
 
 
-def train_autoencoder(trainX,
-                      hidden_layers,
-                      num_epochs=10,
-                      weights_learning_rate=0.5,
-                      bn_learning_rate=0.5,
-                      momentum_rate=0.9,
-                      dropout_rate=0.0):
+def train_autoencoder(trainX, hidden_layers, num_epochs,
+                      weights_learning_rate, bn_learning_rate, momentum_rate, dropout_rate,
+                      ini_weights, ini_biases, ini_momentums, ini_gamma, ini_beta):
 
     layers = hidden_layers
 
-    weights, biases, momentums, gamma, beta = initialize(layers, trainX.shape[1])
+    weights, biases, momentums, gamma, beta = ini_weights, ini_biases, ini_momentums, ini_gamma, ini_beta
 
     exp_mean_linear_inp, exp_var_linear_inp = dict(), dict()
 
     curr_input = trainX
 
     for layer in range(len(hidden_layers)):
+
+        l_weights, l_biases, l_momentums, l_gamma, l_beta = initialize([layers[layer], curr_input.shape[1]],
+                                                                       curr_input.shape[1])
+
+        l_weights[0], l_biases[0], l_momentums[0], l_gamma[0], l_beta[0] = ini_weights[layer], ini_biases[layer], \
+                                                                           ini_momentums[layer], ini_gamma[layer], \
+                                                                           ini_beta[layer]
 
         model = train_neural_network(curr_input, curr_input,
                                      hidden_layers=[layers[layer]],
@@ -394,6 +402,11 @@ def train_autoencoder(trainX,
                                      train_batch_size=trainX.shape[0],
                                      momentum_rate=momentum_rate,
                                      dropout_rate=dropout_rate,
+                                     ini_weights=l_weights,
+                                     ini_biases=l_biases,
+                                     ini_momentums=l_momentums,
+                                     ini_gamma=l_gamma,
+                                     ini_beta=l_beta,
                                      type="regression")
 
         m_weights, m_biases, m_momentums, m_gamma, m_beta, m_exp_mean_linear_inp, m_exp_var_linear_inp = model
@@ -418,17 +431,30 @@ def train_autoencoder(trainX,
     return weights, biases, momentums, gamma, beta, exp_mean_linear_inp, exp_var_linear_inp, curr_input
 
 
-def train_autoencoder_logistic_reg(trainX, trainY,
-                                   hidden_layers,
-                                   num_epochs=10,
-                                   weights_learning_rate=0.5,
-                                   bn_learning_rate=0.5,
-                                   momentum_rate=0.9,
-                                   dropout_rate=0.2):
+def train_autoencoder_reg(trainX, trainY,
+                          hidden_layers,
+                          num_epochs=100,
+                          weights_learning_rate=0.1,
+                          train_batch_size=32,
+                          bn_learning_rate=0.5,
+                          momentum_rate=0.9,
+                          dropout_rate=0.2,
+                          ini_weights=None,
+                          ini_biases=None,
+                          ini_momentums=None,
+                          ini_gamma=None,
+                          ini_beta=None,
+                          type="classification"):
 
-    layers = hidden_layers + [len(set(trainY))]
+    if type == "classification":
+        layers = hidden_layers + [len(set(trainY))]
+    else:
+        layers = hidden_layers + [1]
 
-    weights, biases, momentums, gamma, beta = initialize(layers, trainX.shape[1])
+    if ini_weights is None:
+        weights, biases, momentums, gamma, beta = initialize(layers, trainX.shape[1])
+    else:
+        weights, biases, momentums, gamma, beta = ini_weights, ini_biases, ini_momentums, ini_gamma, ini_beta
 
     autoencoder = train_autoencoder(trainX,
                                     hidden_layers=hidden_layers,
@@ -436,13 +462,14 @@ def train_autoencoder_logistic_reg(trainX, trainY,
                                     weights_learning_rate=weights_learning_rate,
                                     bn_learning_rate=bn_learning_rate,
                                     momentum_rate=momentum_rate,
-                                    dropout_rate=dropout_rate)
+                                    dropout_rate=dropout_rate,
+                                    ini_weights=weights,
+                                    ini_biases=biases,
+                                    ini_momentums=momentums,
+                                    ini_gamma=gamma,
+                                    ini_beta=beta)
 
-    m_weights, m_biases, m_momentums, m_gamma, m_beta, m_exp_mean_linear_inp, m_exp_var_linear_inp, tranformedX = autoencoder
-
-    logistic = linear_model.LogisticRegression()
-
-    lm = logistic.fit(tranformedX, trainY)
+    m_weights, m_biases, m_momentums, m_gamma, m_beta, m_exp_mean_linear_inp, m_exp_var_linear_inp, _ = autoencoder
 
     for layer in range(len(m_weights)):
         weights[layer] = m_weights[layer]
@@ -451,14 +478,12 @@ def train_autoencoder_logistic_reg(trainX, trainY,
         gamma[layer] = m_gamma[layer]
         beta[layer] = m_beta[layer]
 
-    weights[len(weights)-1] = lm.coef_.T
-
     model = train_neural_network(trainX, trainY,
                                  hidden_layers=hidden_layers,
                                  num_epochs=num_epochs,
                                  weights_learning_rate=weights_learning_rate,
                                  bn_learning_rate=bn_learning_rate,
-                                 train_batch_size=50,
+                                 train_batch_size=train_batch_size,
                                  momentum_rate=momentum_rate,
                                  dropout_rate=dropout_rate,
                                  ini_weights=weights,
@@ -466,7 +491,7 @@ def train_autoencoder_logistic_reg(trainX, trainY,
                                  ini_momentums=momentums,
                                  ini_gamma=gamma,
                                  ini_beta=beta,
-                                 type="classification")
+                                 type=type)
 
     return model
 
@@ -500,14 +525,18 @@ def predict_neural_network(testX, model, type="classification"):
 
 def train_nn_cv(trainX, trainY,
                 hidden_layers,
-                num_epochs=10,
+                num_epochs=100,
                 weights_learning_rate=0.1,
                 bn_learning_rate=0.5,
                 train_batch_size=32,
                 momentum_rate=0.9,
                 dropout_rate=0.2,
                 num_cv=5,
-                type="classification"):
+                ini_weights=None,
+                ini_biases=None,
+                ini_momentums=None,
+                ini_gamma=None,
+                ini_beta=None):
 
     kf = KFold(n_splits=num_cv)
 
@@ -527,70 +556,90 @@ def train_nn_cv(trainX, trainY,
                                      train_batch_size=train_batch_size,
                                      momentum_rate=momentum_rate,
                                      dropout_rate=dropout_rate,
-                                     type=type)
+                                     ini_weights=ini_weights,
+                                     ini_biases=ini_biases,
+                                     ini_momentums=ini_momentums,
+                                     ini_gamma=ini_gamma,
+                                     ini_beta=ini_beta,
+                                     type="classification")
 
-        preds_train = predict_neural_network(trainX_batch, model, type=type)
-        preds_test = predict_neural_network(testX_batch, model, type=type)
+        preds_train = predict_neural_network(trainX_batch, model, type="classification")
+        preds_test = predict_neural_network(testX_batch, model, type="classification")
 
-        if type == "classification":
-            print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
-            print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
+        print "Train F1-Score = ", f1_score(trainY_batch, preds_train, average='weighted')
+        print "Train Accuracy = ", accuracy_score(trainY_batch, preds_train)
 
-            print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
-            print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
-        else:
-            print preds_test
-            print loss_mse(preds_test, testY_batch)
+        print "Validation F1-Score = ", f1_score(testY_batch, preds_test, average='weighted')
+        print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
 
         print ""
 
 
-mydata = datasets.load_digits()
+# mydata = datasets.load_digits()
+#
+# trainX = mydata.data
+# trainY = mydata.target
+#
+# n_samples = trainX.shape[0]
+#
+# X_train, y_train = trainX[:int(.9 * n_samples)], trainY[:int(.9 * n_samples)]
+# X_test, y_test = trainX[int(.9 * n_samples):], trainY[int(.9 * n_samples):]
+#
+# X_train, mean, var = standardize_mean_var(X_train)
+# X_test, _, _ = standardize_mean_var(X_test, mean, var)
 
-trainX = mydata.data
-trainY = mydata.target
+# def func(x, y):
+#     return ((3*x+2*y)**3 + (x+y)**2)**2 + ((3*x+2*y)**2 + (x-y)**3)**2
+#
+#
+# a = np.random.uniform(0.0, 0.5, 100)
+# b = np.random.uniform(0.0, 0.5, 100)
+# c = [func(x, y) for (x, y) in zip(a, b)]
+#
+# X_train = np.array([a, b]).T
+# y_train = np.array(c)
 
-n_samples = trainX.shape[0]
+# nn_model = train_neural_network(X_train, y_train,
+#                                 hidden_layers=[500],
+#                                 weights_learning_rate=0.8,
+#                                 bn_learning_rate=0.9,
+#                                 num_epochs=1000,
+#                                 train_batch_size=50,
+#                                 momentum_rate=0.95,
+#                                 dropout_rate=0.0,
+#                                 type="regression")
+#
+# X_test = X_train
+# nn_predict = predict_neural_network(X_test, nn_model, type="regression")
+# print c
+# print nn_predict
 
-X_train, y_train = trainX[:int(.9 * n_samples)], trainY[:int(.9 * n_samples)]
-X_test, y_test = trainX[int(.9 * n_samples):], trainY[int(.9 * n_samples):]
+# print accuracy_score(y_test, nn_predict)
+#
+# autoencoder_model = train_autoencoder_reg(X_train, y_train,
+#                                                    hidden_layers=[10, 10, 10, 10, 10],
+#                                                    weights_learning_rate=0.8,
+#                                                    bn_learning_rate=0.9,
+#                                                    num_epochs=200,
+#                                                    momentum_rate=0.95,
+#                                                    dropout_rate=0.2,
+#                                           type="regression")
+#
+# X_test = X_train
+# nn_predict = predict_neural_network(X_test, autoencoder_model, type="regression")
+# print y_train
+# print nn_predict
 
-X_train, mean, var = standardize_mean_var(X_train)
-X_test, _, _ = standardize_mean_var(X_test, mean, var)
-
-nn_model = train_neural_network(X_train, y_train,
-                                hidden_layers=[200, 200],
-                                weights_learning_rate=0.8,
-                                bn_learning_rate=0.9,
-                                num_epochs=200,
-                                train_batch_size=50,
-                                momentum_rate=0.95,
-                                dropout_rate=0.2,
-                                type="classification")
-
-nn_predict = predict_neural_network(X_test, nn_model, type="classification")
-
-print accuracy_score(y_test, nn_predict)
-
-autoencoder_model = train_autoencoder_logistic_reg(X_train, y_train,
-                                                   hidden_layers=[200, 200],
-                                                   weights_learning_rate=0.5,
-                                                   bn_learning_rate=0.9,
-                                                   num_epochs=100,
-                                                   momentum_rate=0.95,
-                                                   dropout_rate=0.2)
-
-nn_predict = predict_neural_network(X_test, autoencoder_model, type="classification")
-
-print accuracy_score(y_test, nn_predict)
+#print accuracy_score(y_test, nn_predict)
 
 
-train_nn_cv(trainX, trainY,
-            hidden_layers=[200, 200],
-            weights_learning_rate=0.5,
-            bn_learning_rate=0.5,
-            num_epochs=100,
-            train_batch_size=50,
-            momentum_rate=0.95,
-            dropout_rate=0.2,
-            num_cv=5)
+# train_nn_cv(X_train, y_train,
+#             hidden_layers=[500],
+#             weights_learning_rate=0.8,
+#             bn_learning_rate=0.9,
+#             num_epochs=5000,
+#             train_batch_size=32,
+#             momentum_rate=0.95,
+#             dropout_rate=0.0,
+#             num_cv=3,
+#             type="regression")
