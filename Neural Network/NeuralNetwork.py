@@ -43,7 +43,7 @@ def hidden_layer_activation_sigmoid(inputs):
 
 
 def hidden_layer_activation_relu(inputs):
-    return np.maximum(0.00001 * inputs, 0.99999 * inputs)
+    return np.maximum(0.1 * inputs, 0.9 * inputs)
 
 
 def output_layer_activation_class_softmax(inputs):
@@ -73,8 +73,8 @@ def hidden_layer_grad_sigmoid(inputs):
 def hidden_layer_grad_relu(inputs):
     temp = inputs
 
-    temp[temp > 0.0] = 0.99999
-    temp[temp <= 0.0] = 0.00001
+    temp[temp <= 0.0] = 0.1
+    temp[temp > 0.0] = 0.9
 
     return temp
 
@@ -545,9 +545,6 @@ def train_nn_cv(trainX, trainY,
         trainX_batch, testX_batch = trainX[train_index], trainX[test_index]
         trainY_batch, testY_batch = trainY[train_index], trainY[test_index]
 
-        trainX_batch, mean, var = standardize_mean_var(trainX_batch)
-        testX_batch, _, _ = standardize_mean_var(testX_batch, mean, var)
-
         model = train_neural_network(trainX_batch, trainY_batch,
                                      hidden_layers=hidden_layers,
                                      weights_learning_rate=weights_learning_rate,
@@ -573,73 +570,3 @@ def train_nn_cv(trainX, trainY,
         print "Validation Accuracy = ", accuracy_score(testY_batch, preds_test)
 
         print ""
-
-
-# mydata = datasets.load_digits()
-#
-# trainX = mydata.data
-# trainY = mydata.target
-#
-# n_samples = trainX.shape[0]
-#
-# X_train, y_train = trainX[:int(.9 * n_samples)], trainY[:int(.9 * n_samples)]
-# X_test, y_test = trainX[int(.9 * n_samples):], trainY[int(.9 * n_samples):]
-#
-# X_train, mean, var = standardize_mean_var(X_train)
-# X_test, _, _ = standardize_mean_var(X_test, mean, var)
-
-# def func(x, y):
-#     return ((3*x+2*y)**3 + (x+y)**2)**2 + ((3*x+2*y)**2 + (x-y)**3)**2
-#
-#
-# a = np.random.uniform(0.0, 0.5, 100)
-# b = np.random.uniform(0.0, 0.5, 100)
-# c = [func(x, y) for (x, y) in zip(a, b)]
-#
-# X_train = np.array([a, b]).T
-# y_train = np.array(c)
-
-# nn_model = train_neural_network(X_train, y_train,
-#                                 hidden_layers=[500],
-#                                 weights_learning_rate=0.8,
-#                                 bn_learning_rate=0.9,
-#                                 num_epochs=1000,
-#                                 train_batch_size=50,
-#                                 momentum_rate=0.95,
-#                                 dropout_rate=0.0,
-#                                 type="regression")
-#
-# X_test = X_train
-# nn_predict = predict_neural_network(X_test, nn_model, type="regression")
-# print c
-# print nn_predict
-
-# print accuracy_score(y_test, nn_predict)
-#
-# autoencoder_model = train_autoencoder_reg(X_train, y_train,
-#                                                    hidden_layers=[10, 10, 10, 10, 10],
-#                                                    weights_learning_rate=0.8,
-#                                                    bn_learning_rate=0.9,
-#                                                    num_epochs=200,
-#                                                    momentum_rate=0.95,
-#                                                    dropout_rate=0.2,
-#                                           type="regression")
-#
-# X_test = X_train
-# nn_predict = predict_neural_network(X_test, autoencoder_model, type="regression")
-# print y_train
-# print nn_predict
-
-#print accuracy_score(y_test, nn_predict)
-
-
-# train_nn_cv(X_train, y_train,
-#             hidden_layers=[500],
-#             weights_learning_rate=0.8,
-#             bn_learning_rate=0.9,
-#             num_epochs=5000,
-#             train_batch_size=32,
-#             momentum_rate=0.95,
-#             dropout_rate=0.0,
-#             num_cv=3,
-#             type="regression")

@@ -1,4 +1,4 @@
-import NeuralNetwork
+import NeuralNetwork, math
 import numpy as np
 from sklearn import datasets
 from sklearn.metrics import f1_score, accuracy_score
@@ -142,10 +142,10 @@ def xor_gate():
 
 def custom_fun():
 
-    func = lambda x, y: ((3*x+2*y)**3 + (x+y)**2)**2 + ((3*x+2*y)**2 + (x-y)**3)**2
+    func = lambda x, y: (1.0 + math.exp(-x-y)) / (1.0 - math.exp(-x-y))
 
-    a = np.random.uniform(0.0, 0.5, 100)
-    b = np.random.uniform(0.0, 0.5, 100)
+    a = np.random.uniform(-0.5, 0.5, 100)
+    b = np.random.uniform(-0.5, 0.5, 100)
     c = [func(x, y) for (x, y) in zip(a, b)]
 
     trainX = np.array([a, b]).T
@@ -158,10 +158,10 @@ def custom_fun():
 
     print y_test
 
-    hidden_layers = [500, 300, 100]
+    hidden_layers = [50, 50, 50, 50]
     weights_learning_rate = 0.001
     bn_learning_rate = 0.9
-    num_epochs = 1000
+    num_epochs = 500
     train_batch_size = 100
     momentum_rate = 0.95
     dropout_rate = 0.0
