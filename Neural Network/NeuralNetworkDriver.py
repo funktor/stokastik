@@ -117,7 +117,7 @@ def xor_gate():
                                                   type="regression")
 
     nn_predict = NeuralNetwork.predict_neural_network(X_train, nn_model, type="regression")
-    print nn_predict
+    print np.array([nn_predict, y_train]).T
     print ""
 
     autoencoder_model = NeuralNetwork.train_autoencoder_reg(X_train, y_train,
@@ -142,10 +142,10 @@ def xor_gate():
 
 def custom_fun():
 
-    func = lambda x, y: (1.0 + math.exp(-x-y)) / (1.0 - math.exp(-x-y))
+    func = lambda x, y: x**3 + y**2
 
-    a = np.random.uniform(-0.5, 0.5, 100)
-    b = np.random.uniform(-0.5, 0.5, 100)
+    a = np.random.uniform(0.0, 0.5, 1000)
+    b = np.random.uniform(0.0, 0.5, 1000)
     c = [func(x, y) for (x, y) in zip(a, b)]
 
     trainX = np.array([a, b]).T
@@ -158,11 +158,11 @@ def custom_fun():
 
     print y_test
 
-    hidden_layers = [50, 50, 50, 50]
-    weights_learning_rate = 0.001
+    hidden_layers = [1000, 1000]
+    weights_learning_rate = 0.1
     bn_learning_rate = 0.9
     num_epochs = 500
-    train_batch_size = 100
+    train_batch_size = 1000
     momentum_rate = 0.95
     dropout_rate = 0.0
 
@@ -185,7 +185,7 @@ def custom_fun():
                                                   type="regression")
 
     nn_predict = NeuralNetwork.predict_neural_network(X_test, nn_model, type="regression")
-    print nn_predict
+    print np.array([nn_predict, y_test]).T
     print NeuralNetwork.loss_reg(nn_predict, y_test)
     print ""
 
@@ -205,7 +205,7 @@ def custom_fun():
                                                             type="regression")
 
     nn_predict = NeuralNetwork.predict_neural_network(X_test, autoencoder_model, type="regression")
-    print nn_predict
+    print np.array([nn_predict, y_test]).T
     print NeuralNetwork.loss_reg(nn_predict, y_test)
     print ""
 
