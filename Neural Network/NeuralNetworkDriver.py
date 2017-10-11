@@ -2,6 +2,7 @@ import NeuralNetwork, math
 import numpy as np
 from sklearn import datasets
 from sklearn.metrics import f1_score, accuracy_score
+from sklearn.utils import shuffle
 
 def digits_classification():
     mydata = datasets.load_digits()
@@ -11,16 +12,18 @@ def digits_classification():
 
     n_samples = trainX.shape[0]
 
+    trainX, trainY = shuffle(trainX, trainY, random_state=0)
+
     X_train, y_train = trainX[:int(.8 * n_samples)], trainY[:int(.8 * n_samples)]
     X_test, y_test = trainX[int(.8 * n_samples):], trainY[int(.8 * n_samples):]
 
-    hidden_layers = [1000]
+    hidden_layers = [700, 700]
     weights_learning_rate = 0.5
     bn_learning_rate = 0.9
     num_epochs = 100
     train_batch_size = 32
     momentum_rate = 0.95
-    dropout_rate = 0.0
+    dropout_rate = 0.2
 
     layers = hidden_layers + [len(set(y_train))]
     weights, biases, momentums, gamma, beta = NeuralNetwork.initialize(layers, X_train.shape[1])
@@ -33,7 +36,7 @@ def digits_classification():
                               train_batch_size=train_batch_size,
                               momentum_rate=momentum_rate,
                               dropout_rate=dropout_rate,
-                              num_cv=3,
+                              num_cv=5,
                               ini_weights=weights,
                               ini_biases=biases,
                               ini_momentums=momentums,
@@ -209,4 +212,4 @@ def custom_fun():
     print NeuralNetwork.loss_reg(nn_predict, y_test)
     print ""
 
-custom_fun()
+digits_classification()
