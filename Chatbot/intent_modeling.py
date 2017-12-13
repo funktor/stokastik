@@ -1,9 +1,12 @@
-import csv, re, gensim, collections
+import csv, re, collections, keras, os, random
 import numpy as np
-from gensim.models.doc2vec import TaggedDocument
 from nltk.tokenize import RegexpTokenizer
 from sklearn.metrics import roc_auc_score
 from sklearn.neural_network import MLPClassifier
+from keras.layers import Input, LSTM, Dense, Embedding
+from keras.models import Model, model_from_json
+from keras.preprocessing import text, sequence
+from keras.utils import np_utils
 
 
 def clean_tokens(tokens):
@@ -15,10 +18,6 @@ def tokenize(mystr):
     mystr = mystr.lower()
 
     return tokenizer.tokenize(mystr)
-
-
-def get_similarity(vec_1, vec_2):
-    return np.fabs(np.dot(vec_1, vec_2)) / (np.linalg.norm(vec_1) * np.linalg.norm(vec_2))
 
 
 def get_tokens(sentence):
@@ -33,9 +32,10 @@ def get_question_intent_token(question_tokens):
 
     wh_words.update(["how", "what", "what's", "why", "who", "where", "which", "when"])
 
-    final_token = "None"
+    final_token, pos = "None", -1
 
     if question_tokens[0] in qtypes:
+        pos = 0
         if len(question_tokens) > 1:
             final_token = question_tokens[0] + "__" + question_tokens[1]
         else:
@@ -44,10 +44,11 @@ def get_question_intent_token(question_tokens):
     if final_token == "None":
         for idx in range(len(question_tokens)):
             if question_tokens[idx] in wh_words:
-                if idx < len(question_tokens) and question_tokens[idx + 1] in qtypes:
+                pos = idx
+                if idx < len(question_tokens) - 1 and question_tokens[idx + 1] in qtypes:
                     final_token = question_tokens[idx] + "__" + question_tokens[idx + 1]
                 else:
-                    if question_tokens[idx] == "how" and idx < len(question_tokens):
+                    if question_tokens[idx] == "how" and idx < len(question_tokens) - 1:
                         final_token = question_tokens[idx] + "__" + question_tokens[idx + 1]
                     else:
                         final_token = question_tokens[idx]
@@ -56,13 +57,28 @@ def get_question_intent_token(question_tokens):
     if final_token == "None":
         for idx in range(len(question_tokens)):
             if question_tokens[idx] in qtypes:
-                if idx < len(question_tokens):
+                pos = idx
+                if idx < len(question_tokens) - 1:
                     final_token = question_tokens[idx] + "__" + question_tokens[idx + 1]
                 else:
                     final_token = question_tokens[idx]
                 break
 
-    return final_token
+    return final_token, pos
+
+
+def prune_questions(questions):
+    for idx in range(len(questions)):
+        question = questions[idx]
+
+        tokens = get_tokens(question)
+        question_intent_token, pos = get_question_intent_token(tokens)
+        
+        if pos != -1:
+            question = " ".join(tokens[pos:min(pos + 3, len(tokens))])
+            questions[idx] = question
+        
+    return questions
 
 
 def cluster_intents(questions):
@@ -74,75 +90,86 @@ def cluster_intents(questions):
         question = questions[idx]
 
         tokens = get_tokens(question)
-        question_intent_token = get_question_intent_token(tokens)
+        question_intent_token, pos = get_question_intent_token(tokens)
 
         intents_dict[question_intent_token].append(idx)
 
     return intents_dict
 
 
-def get_resultant_vector(vec_1, vec_2):
-    res_vec = np.array(vec_1) - np.array(vec_2)
+def transform_sentences(sentences):
+    tokenizer = text.Tokenizer()
+    sentences = [" ".join(get_tokens(sentence)) for sentence in sentences]
+    tokenizer.fit_on_texts(sentences)
 
-    return res_vec ** 2
-
-
-def train_doc2vec(sentences):
-    taggedDocs = []
-
-    print("Generating TaggedDocuments...")
-
-    for idx in range(len(sentences)):
-        sentence = sentences[idx]
-        tokens = get_tokens(sentence)
-
-        if len(tokens) > 0:
-            taggedDocs.append(TaggedDocument(tokens, [str(idx)]))
-
-    print("Generating embeddings...")
-    model = gensim.models.Doc2Vec(alpha=0.025, size=300, window=5, min_alpha=0.025, min_count=2,
-                                  workers=4, negative=5, hs=0, iter=200)
-
-    model.build_vocab(taggedDocs)
-    model.train(taggedDocs, total_examples=model.corpus_count, epochs=200)
-
-    return model
+    return tokenizer.texts_to_sequences(sentences), tokenizer
 
 
-def get_data_pairs(q_embeds, a_embeds, clusters):
-    mydata, labels = [], []
-
+def get_data_pairs(questions, answers, clusters):
     print("Generating training data...")
+
+    q_data, a_data, labels = [], [], []
+    all_indexes_set = set(range(len(questions)))
+
+    questions, q_tokenizer = transform_sentences(questions)
+    answers, a_tokenizer = transform_sentences(answers)
+    
+    questions = sequence.pad_sequences(questions)
+    answers = sequence.pad_sequences(answers)
+
     for cluster, indexes in clusters.items():
         idx_set = set(indexes)
+        negative_indices = all_indexes_set.difference(idx_set)
 
         for idx in indexes:
-            if str(idx) in q_embeds.docvecs and str(idx) in a_embeds.docvecs:
-                question_vec = q_embeds.docvecs[str(idx)]
+            q_data.append(questions[idx])
+            a_data.append(answers[idx])
+            labels.append(1)
 
-                most_dissimilar = q_embeds.docvecs.most_similar(negative=[str(idx)], topn=5)
+            neg_idx = random.sample(negative_indices, 1)[0]
 
-                answer_vec = a_embeds.docvecs[str(idx)]
-                mydata.append(get_resultant_vector(question_vec, answer_vec))
-                labels.append(1)
+            q_data.append(questions[idx])
+            a_data.append(answers[neg_idx])
+            labels.append(0)
 
-                for idx2, sim in most_dissimilar:
-                    if int(idx2) not in idx_set and idx2 in a_embeds.docvecs:
-                        answer_vec = a_embeds.docvecs[idx2]
-                        mydata.append(get_resultant_vector(question_vec, answer_vec))
-                        labels.append(0)
-
-    return mydata, labels
+    return np.array(q_data), np.array(a_data), np.array(labels), q_tokenizer, a_tokenizer
 
 
-def train_scoring_model(train_data, train_labels):
+def get_num_features(dataX):
+    return np.amax(dataX) + 1
+
+
+def train_scoring_model(q_data, a_data, labels):
+    
+    q_num_features, a_num_features = get_num_features(q_data), get_num_features(a_data)
+    
+    print("Defining architecture...")
+    
+    q_input = Input(shape=(q_data.shape[1], ))
+    q_embedding = Embedding(output_dim=256, input_dim=q_num_features, input_length=q_data.shape[1])(q_input)
+    q_lstm = LSTM(128)(q_embedding)
+    
+    a_input = Input(shape=(a_data.shape[1], ))
+    a_embedding = Embedding(output_dim=256, input_dim=a_num_features, input_length=a_data.shape[1])(a_input)
+    a_lstm = LSTM(128)(a_embedding)
+    
+    merged_vector = keras.layers.concatenate([q_lstm, a_lstm], axis=-1)
+    
+    dense_layer = Dense(64, activation='relu')(merged_vector)
+    
+    predictions = Dense(1, activation='sigmoid')(dense_layer)
+    
+    model = Model(inputs=[q_input, a_input], outputs=predictions)
+    
+    model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['accuracy'])
+    
     print("Training model...")
-    model = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(300), random_state=1)
-    model.fit(train_data, train_labels)
+    model.fit([q_data, a_data], labels, epochs=10, batch_size=64)
 
     print("Scoring...")
-    predictions = model.predict(train_data)
-
-    print("AUC = ", roc_auc_score(train_labels, predictions, average='weighted'))
-
+    predicted = model.predict([q_data, a_data])
+    score = roc_auc_score(labels, predicted, average="weighted")
+    
+    print("Score = ", score)
+    
     return model

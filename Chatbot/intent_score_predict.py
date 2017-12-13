@@ -4,29 +4,31 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 
-def predict_scoring_model(model, test_data, test_labels):
+def predict_scoring_model(model, q_data, a_data, labels):
+    q_data, a_data, labels = intent_modeling.transform_data_lstm(q_data, a_data, labels)
+    
     print("Scoring...")
-    predictions = model.predict(test_data)
+    predicted = model.predict([q_data, a_data])
 
-    return roc_auc_score(test_labels, predictions, average='weighted')
+    return roc_auc_score(labels, predicted, average='weighted')
 
 
-def kfold_cv(mydata, labels):
+def kfold_cv(q_data, a_data, labels):
     skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-    mydata, labels = np.array(mydata), np.array(labels)
+    q_data, a_data, labels = np.array(q_data), np.array(a_data), np.array(labels)
 
     results = []
 
     i = 1
-    for train_index, test_index in skf.split(mydata, labels):
+    for train_index, test_index in skf.split(q_data, a_data, labels):
         print("Doing CV Round ", i)
 
-        train_data, test_data = mydata[train_index], mydata[test_index]
+        train_q_data, train_a_data, test_q_data, test_a_data = q_data[train_index], a_data[train_index], q_data[test_index], a_data[test_index]
         train_labels, test_labels = labels[train_index], labels[test_index]
 
-        scoring_model = intent_modeling.train_scoring_model(train_data, train_labels)
+        scoring_model = intent_modeling.train_scoring_model(train_q_data, train_a_data, train_labels)
 
-        results.append(predict_scoring_model(scoring_model, test_data, test_labels))
+        results.append(predict_scoring_model(scoring_model, test_q_data, test_a_data, test_labels))
 
         i += 1
 
@@ -35,43 +37,25 @@ def kfold_cv(mydata, labels):
 
 def custom_infer_vector(embeds, tokens):
     vecs = []
-    for cnt in range(500):
+    for cnt in range(50):
         vecs.append(embeds.infer_vector(tokens))
 
     return np.mean(vecs, axis=0)
 
 
-def predict_score_cluster(question, answer, q_embeds, a_embeds, clusters):
-    q_tokens = intent_modeling.get_tokens(question)
-    a_tokens = intent_modeling.get_tokens(answer)
-
-    question_intent_token = intent_modeling.get_question_intent_token(q_tokens)
-
-    intent_indices = clusters[question_intent_token]
-
-    question_vector = custom_infer_vector(q_embeds, q_tokens)
-
-    similarities = [(intent_modeling.get_similarity(question_vector, q_embeds.docvecs[str(intent_idx)]), intent_idx)
-                    for intent_idx in intent_indices if str(intent_idx) in q_embeds.docvecs]
-
-    similarities = sorted(similarities, key=lambda k: -k[0])
-
-    best_intent_idx = similarities[0][1]
-
-    answer_vector = custom_infer_vector(a_embeds, a_tokens)
-
-    return intent_modeling.get_similarity(answer_vector, a_embeds.docvecs[str(best_intent_idx)]), best_intent_idx
-
-
 def predict_score_train(question_idx, answer_idx, q_embeds, a_embeds, scoring_model):
     question_vector = q_embeds.docvecs[str(question_idx)]
     answer_vector = a_embeds.docvecs[str(answer_idx)]
+    
+    q_data = np.array([question_vector])
+    a_data = np.array([answer_vector])
+    labels = np.array([1])
+    
+    q_data, a_data, labels = intent_modeling.transform_data_lstm(q_data, a_data, labels)
+    
+    score = scoring_model.predict([q_data, a_data])
 
-    test_data = [intent_modeling.get_resultant_vector(question_vector, answer_vector)]
-
-    score = scoring_model.predict_proba(test_data)
-
-    return score[0][1]
+    return score[0][0]
 
 
 def predict_score_test(question, answer, q_embeds, a_embeds, scoring_model):
@@ -81,6 +65,26 @@ def predict_score_test(question, answer, q_embeds, a_embeds, scoring_model):
     question_vector = custom_infer_vector(q_embeds, q_tokens)
     answer_vector = custom_infer_vector(a_embeds, a_tokens)
 
-    test_data = [intent_modeling.get_resultant_vector(question_vector, answer_vector)]
+    q_data = np.array([question_vector])
+    a_data = np.array([answer_vector])
+    labels = np.array([1])
+    
+    q_data, a_data, labels = intent_modeling.transform_data_lstm(q_data, a_data, labels)
+    
+    score = scoring_model.predict([q_data, a_data])
 
-    return scoring_model.predict_proba(test_data)[0][1]
+    return score[0][0]
+
+def test_model_qa(question, answer, model, q_tokenizer, a_tokenizer, q_dim, a_dim):
+    seq1 = q_tokenizer.texts_to_sequences([question])
+    seq2 = a_tokenizer.texts_to_sequences([answer])
+   
+    seq1[0] = [0]*(q_dim - len(seq1[0])) + seq1[0]
+    seq2[0] = [0]*(a_dim - len(seq2[0])) + seq2[0]
+   
+    out = model.predict([np.array(seq1), np.array(seq2)])
+    print(out)
+   
+    pred_class = np.argmax(out[0])
+   
+    return pred_class
