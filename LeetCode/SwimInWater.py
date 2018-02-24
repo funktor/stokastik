@@ -41,8 +41,6 @@ class Solution(object):
         while left <= right:
             curr_height = int((left + right) / 2)
 
-            print curr_height
-
             if self.can_swim(grid, curr_height):
                 right = curr_height - 1
             else:
