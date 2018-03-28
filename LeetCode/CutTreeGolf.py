@@ -1,91 +1,62 @@
+import collections
+
 class Solution(object):
     def bfs_search_fast(self, forest, start, end):
         if start == end:
             return 0
 
-        queue = [(start[0], start[1], 0)]
+        queue = collections.deque([(start[0], start[1], 0)])
         visited = set([(start[0], start[1])])
 
         while len(queue) > 0:
-            x, y, depth = queue.pop()
+            x, y, depth = queue.popleft()
 
             if (x, y) == end:
                 return depth
 
             if end[0] >= x and end[1] >= y:
-                if x + 1 <= end[0] and (x + 1, y) not in visited and forest[x + 1][y] != 0:
-                    visited.add((x + 1, y))
-                    queue.insert(0, (x + 1, y, depth + 1))
-
-                if y + 1 <= end[1] and (x, y + 1) not in visited and forest[x][y + 1] != 0:
-                    visited.add((x, y + 1))
-                    queue.insert(0, (x, y + 1, depth + 1))
-
+                self.check_insert(x + 1, y, 0, 0, end[0], end[1], queue, depth + 1, forest, visited)
+                self.check_insert(x, y + 1, 0, 0, end[0], end[1], queue, depth + 1, forest, visited)
 
             elif end[0] >= x and end[1] <= y:
-                if x + 1 <= end[0] and (x + 1, y) not in visited and forest[x + 1][y] != 0:
-                    visited.add((x + 1, y))
-                    queue.insert(0, (x + 1, y, depth + 1))
-
-                if y - 1 >= end[1] and (x, y - 1) not in visited and forest[x][y - 1] != 0:
-                    visited.add((x, y - 1))
-                    queue.insert(0, (x, y - 1, depth + 1))
-
+                self.check_insert(x + 1, y, 0, end[1], end[0], len(forest[0]) - 1, queue, depth + 1, forest, visited)
+                self.check_insert(x, y - 1, 0, end[1], end[0], len(forest[0]) - 1, queue, depth + 1, forest, visited)
 
             elif end[0] <= x and end[1] <= y:
-                if x - 1 >= end[0] and (x - 1, y) not in visited and forest[x - 1][y] != 0:
-                    visited.add((x - 1, y))
-                    queue.insert(0, (x - 1, y, depth + 1))
-
-                if y - 1 >= end[1] and (x, y - 1) not in visited and forest[x][y - 1] != 0:
-                    visited.add((x, y - 1))
-                    queue.insert(0, (x, y - 1, depth + 1))
-
+                self.check_insert(x - 1, y, end[0], end[1], len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
+                self.check_insert(x, y - 1, end[0], end[1], len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
 
             else:
-                if x - 1 >= end[0] and (x - 1, y) not in visited and forest[x - 1][y] != 0:
-                    visited.add((x - 1, y))
-                    queue.insert(0, (x - 1, y, depth + 1))
-
-                if y + 1 <= end[1] and (x, y + 1) not in visited and forest[x][y + 1] != 0:
-                    visited.add((x, y + 1))
-                    queue.insert(0, (x, y + 1, depth + 1))
+                self.check_insert(x - 1, y, end[0], 0, len(forest) - 1, end[1], queue, depth + 1, forest, visited)
+                self.check_insert(x, y + 1, end[0], 0, len(forest) - 1, end[1], queue, depth + 1, forest, visited)
 
         return -1
+
+
+    def check_insert(self, x, y, start_x, start_y, end_x, end_y, queue, depth, forest, visited):
+        if start_x <= x <= end_x and start_y <= y <= end_y and (x, y) not in visited and forest[x][y]:
+            visited.add((x, y))
+            queue.append((x, y, depth))
+
 
 
     def bfs_search(self, forest, start, end):
         if start == end:
             return 0
 
-        queue = [(start[0], start[1], 0)]
+        queue = collections.deque([(start[0], start[1], 0)])
         visited = set([(start[0], start[1])])
 
         while len(queue) > 0:
-            x, y, depth = queue.pop()
+            x, y, depth = queue.popleft()
 
             if (x, y) == end:
                 return depth
 
-
-            if x - 1 >= 0 and (x - 1, y) not in visited and forest[x - 1][y] != 0:
-                visited.add((x - 1, y))
-                queue.insert(0, (x - 1, y, depth + 1))
-
-
-            if x + 1 < len(forest) and (x + 1, y) not in visited and forest[x + 1][y] != 0:
-                visited.add((x + 1, y))
-                queue.insert(0, (x + 1, y, depth + 1))
-
-
-            if y - 1 >= 0 and (x, y - 1) not in visited and forest[x][y - 1] != 0:
-                visited.add((x, y - 1))
-                queue.insert(0, (x, y - 1, depth + 1))
-
-
-            if y + 1 < len(forest[0]) and (x, y + 1) not in visited and forest[x][y + 1] != 0:
-                visited.add((x, y + 1))
-                queue.insert(0, (x, y + 1, depth + 1))
+            self.check_insert(x - 1, y, 0, 0, len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
+            self.check_insert(x + 1, y, 0, 0, len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
+            self.check_insert(x, y - 1, 0, 0, len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
+            self.check_insert(x, y + 1, 0, 0, len(forest) - 1, len(forest[0]) - 1, queue, depth + 1, forest, visited)
 
         return -1
 
