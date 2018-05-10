@@ -17,14 +17,17 @@ class Solution(object):
                     max_area = max(max_area, x)
 
                     for row2 in range(row + 1, len(matrix)):
-                        y = max_len_rt[row2][col]
+                        if matrix[row2][col] == "1":
+                            y = max_len_rt[row2][col]
 
-                        if y <= x:
-                            area = (row2 - row + 1) * y
-                            x = y
+                            if y <= x:
+                                area = (row2 - row + 1) * y
+                                x = y
+                            else:
+                                area = (row2 - row + 1) * x
+
+                            max_area = max(max_area, area)
                         else:
-                            area = (row2 - row + 1) * x
-
-                        max_area = max(max_area, area)
+                            break
 
         return max_area
