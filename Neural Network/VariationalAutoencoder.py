@@ -1,9 +1,7 @@
-% matplotlib inline
-
-from keras.layers import Input, Dense, Conv2D, MaxPooling2D, UpSampling2D, Lambda, Flatten, Reshape, LSTM, RepeatVector, \
-    Dropout
+from keras.layers import Input, Dense, Conv2D, Conv2DTranspose, MaxPooling2D, UpSampling2D, Lambda, Layer, Flatten, \
+    Reshape, LSTM, RepeatVector, Dropout
 from keras.models import Model
-from keras.models import model_from_json
+from keras.models import model_from_json, load_model
 from keras import backend as K
 from keras.losses import mse, binary_crossentropy
 from keras.optimizers import Adam
@@ -86,6 +84,19 @@ def standard_autoencoder(X_train):
     return encoder, decoder, autoencoder
 
 
+class CustomVariationalLayer(Layer):
+    def vae_loss(self, z_mean, z_sigma, inputs, outputs):
+        reconstruction_loss = K.sum(K.binary_crossentropy(K.batch_flatten(inputs), K.batch_flatten(outputs)), axis=-1)
+        kl_loss = - 0.5 * K.sum(1.0 + z_sigma - K.square(z_mean) - K.exp(z_sigma), axis=-1)
+        return K.mean(reconstruction_loss + kl_loss)
+
+    def call(self, inputs):
+        z_mean, z_sigma, inp, out = inputs
+        loss = self.vae_loss(z_mean, z_sigma, inp, out)
+        self.add_loss(loss, inputs=inputs)
+        return out
+
+
 def variational_autoencoder(X_train):
     m = np.prod(X_train.shape[1:])
     input_img = Input(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
@@ -108,16 +119,12 @@ def variational_autoencoder(X_train):
 
     # Full Autoencoder
     autoencoder_out = decoder(encoder(input_img)[2])
-    autoencoder = Model(input_img, autoencoder_out)
+    out = CustomVariationalLayer()([z_mean, z_sigma, input_img, autoencoder_out])
+    autoencoder = Model(input_img, out)
 
-    # Loss is summation of reconstruction loss and KL Loss
-    reconstruction_loss = K.sum(K.binary_crossentropy(Flatten()(input_img), Flatten()(autoencoder_out)), axis=-1)
-    kl_loss = - 0.5 * K.sum(1.0 + z_sigma - K.square(z_mean) - K.exp(z_sigma), axis=-1)
-
-    autoencoder.add_loss(K.mean(reconstruction_loss + kl_loss))
     adam = Adam(lr=0.0005)
     autoencoder.compile(optimizer=adam, loss=None)
-    autoencoder.fit(X_train, shuffle=True, epochs=100, batch_size=32)
+    autoencoder.fit(X_train, shuffle=True, epochs=15, batch_size=32)
 
     return encoder, decoder, autoencoder
 
@@ -135,9 +142,9 @@ def convolution_autoencoder(X_train):
     # Decoder
     decoder_input = Input(shape=(196,))
     p = Reshape((14, 14, 1))(decoder_input)
-    x = Conv2D(32, (3, 3), activation='relu', padding='same')(p)
+    x = Conv2DTranspose(32, (3, 3), activation='relu', padding='same')(p)
     x = UpSampling2D((2, 2))(x)
-    dec_out = Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
+    dec_out = Conv2DTranspose(1, (3, 3), activation='sigmoid', padding='same')(x)
     decoder = Model(decoder_input, dec_out)
 
     # Full Autoencoder
@@ -173,23 +180,19 @@ def conv_variational_autoencoder(X_train):
     # Decoder
     decoder_input = Input(shape=(196,))
     p = Reshape((14, 14, 1))(decoder_input)
-    x = Conv2D(32, (3, 3), activation='relu', padding='same')(p)
+    x = Conv2DTranspose(32, (3, 3), activation='relu', padding='same')(p)
     x = UpSampling2D((2, 2))(x)
-    dec_out = Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
+    dec_out = Conv2DTranspose(1, (3, 3), activation='sigmoid', padding='same')(x)
     decoder = Model(decoder_input, dec_out)
 
     # Full Autoencoder
     autoencoder_out = decoder(encoder(input_img)[2])
-    autoencoder = Model(input_img, autoencoder_out)
+    out = CustomVariationalLayer()([z_mean, z_sigma, input_img, autoencoder_out])
+    autoencoder = Model(input_img, out)
 
-    # Loss is summation of reconstruction loss and KL Loss
-    reconstruction_loss = K.sum(K.binary_crossentropy(Flatten()(input_img), Flatten()(autoencoder_out)), axis=-1)
-    kl_loss = - 0.5 * K.sum(1.0 + z_sigma - K.square(z_mean) - K.exp(z_sigma), axis=-1)
-
-    autoencoder.add_loss(K.mean(reconstruction_loss + kl_loss))
     adam = Adam(lr=0.0005)
     autoencoder.compile(optimizer=adam, loss=None)
-    autoencoder.fit(X_train, shuffle=True, epochs=10, batch_size=32)
+    autoencoder.fit(X_train, shuffle=True, epochs=50, batch_size=32)
 
     return encoder, decoder, autoencoder
 
@@ -217,11 +220,11 @@ def save_model(model, model_json_path, model_wts_path):
     model.save_weights(model_wts_path)
 
 
-def load_model(model_json_path, model_wts_path):
+def load_model(model_json_path, model_wts_path, custom_objects=None):
     json_file = open(model_json_path, 'r')
     loaded_model_json = json_file.read()
     json_file.close()
-    loaded_model = model_from_json(loaded_model_json)
+    loaded_model = model_from_json(loaded_model_json, custom_objects=custom_objects)
 
     loaded_model.load_weights(model_wts_path)
 
@@ -235,71 +238,97 @@ def get_representation(encoder, X_test):
     return encoded
 
 
-# X_train, X_test, train_labels, test_labels = load_mnist_data()
-# (X_train, _), (X_test, _) = mnist.load_data()
-# print X_train.shape
+    # X_train, X_test, train_labels, test_labels = load_mnist_data()
+    # (X_train, _), (X_test, _) = mnist.load_data()
+    # print X_train.shape
 
-# X_train, train_labels = get_input_data("/Users/funktor/Downloads/cats")
-# print X_train.shape
+    # X_train, train_labels = get_input_data("/Users/funktor/Downloads/cats")
+    # print X_train.shape
 
-# X_test, test_labels = get_input_data("/Users/funktor/Downloads/cats_test")
-# print X_test.shape
+    # X_test, test_labels = get_input_data("/Users/funktor/Downloads/cats_test")
+    # print X_test.shape
 
-# with open("/Users/funktor/train_data.pkl", "wb") as train_f:
-#     pickle.dump(X_train, train_f)
+    # with open("/Users/funktor/train_data.pkl", "wb") as train_f:
+    #     pickle.dump(X_train, train_f)
 
-# with open("/Users/funktor/test_data.pkl", "wb") as test_f:
-#     pickle.dump(X_test, test_f)
+    # with open("/Users/funktor/test_data.pkl", "wb") as test_f:
+    #     pickle.dump(X_test, test_f)
 
-# encoder, decoder, autoencoder = conv_variational_autoencoder(X_train[:5000])
+    # encoder, decoder, autoencoder = variational_autoencoder(X_train)
 
-# encoder = load_model("encoder.json", "encoder.h5")
-# decoder = load_model("decoder.json", "decoder.h5")
-# autoencoder = load_model("autoencoder.json", "autoencoder.h5")
+    # print autoencoder.evaluate(X_train[0:10], X_train[0:10])
 
-# encoded_img = encoder.predict(X_train[5:6])
-# encoded_img = encoded_img.reshape((len(encoded_img), 32, 32, 1))
+    # encoded_img = encoder.predict(X_train[5:6])
+    # encoded_img = encoded_img.reshape((len(encoded_img), 32, 32, 1))
 
-# decoded_img = decoder.predict(encoded_img)
+    # decoded_img = decoder.predict(encoded_img)
 
-# save_model(encoder, "encoder.json", "encoder.h5")
-# save_model(autoencoder, "autoencoder.json", "autoencoder.h5")
+    # save_model(encoder, "encoder.json", "encoder.h5")
+    # save_model(decoder, "decoder.json", "decoder.h5")
+    # save_model(autoencoder, "autoencoder.json", "autoencoder.h5")
 
-# encoded_imgs = encoder.predict(X_train[:20000])
-# encoded_imgs = encoded_imgs + 0.5 * np.random.normal(loc=0.0, scale=1.0, size=encoded_imgs.shape)
-# encoded_imgs = encoded_imgs[2]
-# w = 0.5 * (encoded_imgs[0:1] + encoded_imgs[1:2])
-# decoded_imgs = decoder.predict(encoded_imgs)
+    # encoder, decoder, autoencoder = None, None, None
 
-# plt.imshow(X_train[11].reshape(28, 28))
-# plt.show()
+    # encoder = load_model("encoder.json", "encoder.h5")
+    # decoder = load_model("decoder.json", "decoder.h5")
+    # autoencoder = load_model("autoencoder.json", "autoencoder.h5", {'CustomVariationalLayer': CustomVariationalLayer()})
 
-# for i in range(10):
-#     encoded_img = encoder.predict(X_train[11:12])
-#     encoded_img = encoded_img[2]
-#     decoded_img = decoder.predict(encoded_img)
-#     plt.imshow(decoded_img[0].reshape(28, 28))
-#     plt.show()
+    # x = encoder.predict(X_train[0:10])
+    # p, q = x[0], x[1]
 
-# model = train_classifier(encoded_imgs, to_categorical(train_labels)[:20000])
-# enc_imgs = encoded_imgs[2]
-# enc_imgs = enc_imgs.reshape((len(enc_imgs), np.prod(enc_imgs.shape[1:])))
+    # adam = Adam(lr=0.0005)
+    # autoencoder.compile(optimizer=adam, loss=vae_loss(p, q))
 
-# encoded_imgs = encoder.predict(X_test[:20000])
-# encoded_imgs = encoded_imgs[2]
-# model.evaluate(encoded_imgs, to_categorical(test_labels)[:20000])
+    # adam = Adam(lr=0.0005)
+    # autoencoder.compile(optimizer=adam, loss=None)
+    # print autoencoder.evaluate(x=X_train[0:10], y=None)
 
-# print len(encoded_imgs)
 
-# w = X_train.reshape((len(X_train), np.prod(X_train.shape[1:])))
-# kmeans = KMeans(n_clusters=2).fit(enc_imgs)
 
-# print kmeans.labels_[:200]
+    # encoded_imgs = encoder.predict(X_train[:20000])
+    # encoded_imgs = encoded_imgs + 0.5 * np.random.normal(loc=0.0, scale=1.0, size=encoded_imgs.shape)
+    # encoded_imgs = encoded_imgs[2]
+    # w = 0.5 * (encoded_imgs[0:1] + encoded_imgs[1:2])
+    # decoded_imgs = decoder.predict(encoded_imgs)
 
-# decoded_imgs = autoencoder.predict(X_test[:10])
+    # plt.imshow(X_train[4].reshape(28, 28))
+    # plt.show()
 
-# for i in range(10):
-#     plt.imshow(X_test[i].reshape(28, 28))
-#     plt.show()
-#     plt.imshow(decoded_imgs[i].reshape(28, 28))
-#     plt.show()
+    # n = 10
+    # figure = np.zeros((28 * n, 28 * n))
+
+    # for i in range(n):
+    #     for j in range(n):
+    #         encoded_img = encoder.predict(X_train[11:12])
+    #         encoded_img = encoded_img[2]
+    #         decoded_img = decoder.predict(encoded_img)
+
+    #         digit = decoded_img[0].reshape(28, 28)
+    #         figure[i * 28: (i + 1) * 28, j * 28: (j + 1) * 28] = digit
+
+    # plt.figure(figsize=(10, 10))
+    # plt.imshow(figure, cmap='gnuplot2')
+    # plt.show()
+
+    # model = train_classifier(encoded_imgs, to_categorical(train_labels)[:20000])
+    # enc_imgs = encoded_imgs[2]
+    # enc_imgs = enc_imgs.reshape((len(enc_imgs), np.prod(enc_imgs.shape[1:])))
+
+    # encoded_imgs = encoder.predict(X_test[:20000])
+    # encoded_imgs = encoded_imgs[2]
+    # model.evaluate(encoded_imgs, to_categorical(test_labels)[:20000])
+
+    # print len(encoded_imgs)
+
+    # w = X_train.reshape((len(X_train), np.prod(X_train.shape[1:])))
+    # kmeans = KMeans(n_clusters=2).fit(enc_imgs)
+
+    # print kmeans.labels_[:200]
+
+    # decoded_imgs = autoencoder.predict(X_test[:10])
+
+    # for i in range(10):
+    #     plt.imshow(X_test[i].reshape(64, 64))
+    #     plt.show()
+    #     plt.imshow(decoded_imgs[i].reshape(64, 64))
+    #     plt.show()
