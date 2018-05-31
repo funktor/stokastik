@@ -33,7 +33,7 @@ def get_images_from_folder(folder):
     labels = np.array(labels)
     labels = labels.reshape((len(labels), 1))
 
-    return np.array(images), labels
+    return  np.array(images), labels
 
 
 def get_input_data(folder):
