@@ -1,59 +1,48 @@
 import collections
 
 class Solution(object):
-    def is_concatenated(self, word_idx, words, word_map):
-        word = words[word_idx]
-        queue = collections.deque([0])
+    def is_concatenated(self, word, original_word, prefixes, word_set):
+        if word in word_set and word != original_word:
+            return True
 
-        while len(queue) > 0:
-            start = queue.popleft()
-            possible_indices = word_map[word_idx][start]
+        if word[0] not in prefixes:
+            return False
 
-            for end in possible_indices:
-                pos_word = word[start : end + 1]
+        else:
+            out = False
 
-                if pos_word != word:
-                    if end == len(word) - 1:
-                        return True
+            for pos in range(1, len(word)):
+                prefix = word[:pos]
 
-                    if end + 1 in word_map[word_idx]:
-                        queue.append(end + 1)
+                if prefix in prefixes:
+                    if prefix in word_set:
+                        suffix = word[len(prefix):]
+                        out = out or self.is_concatenated(suffix, original_word, prefixes, word_set)
 
-        return False
+                else:
+                    break
+
+            return out
 
 
     def findAllConcatenatedWordsInADict(self, words):
         words = [word for word in words if len(word) > 0]
         word_set = set(words)
 
-        word_map = collections.defaultdict(dict)
-        valid_soln = []
+        prefixes = set()
 
-        for idx in range(len(words)):
-            word = words[idx]
+        for word in words:
+            for pos in range(1, len(word) + 1):
+                prefix = word[:pos]
+                prefixes.add(prefix)
 
-            flag = False
-            for i in range(len(word)):
-                word_map[idx][i] = []
+        out = []
 
-                for j in range(i, len(word)):
-                    if word[i : j + 1] in word_set and word[j + 1 :] in word_set and i == 0 and j != len(word) - 1:
-                        valid_soln.append(idx)
-                        flag = True
-                        break
-
-                    elif word[i : j + 1] in word_set:
-                        word_map[idx][i].append(j)
-
-                if flag:
-                    break
-
-        q = set(valid_soln)
-
-        out = [words[idx] for idx in valid_soln]
-
-        for word_idx in range(len(words)):
-            if word_idx not in q and self.is_concatenated(word_idx, words, word_map):
-                out.append(words[word_idx])
+        for word in words:
+            if self.is_concatenated(word, word, prefixes, word_set):
+                out.append(word)
 
         return out
+
+sol = Solution()
+print sol.findAllConcatenatedWordsInADict(["cat","cats","catsdogcats","dog","dogcatsdog","hippopotamuses","rat","ratcatdogcat"])
