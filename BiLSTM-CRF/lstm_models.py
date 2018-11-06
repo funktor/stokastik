@@ -50,7 +50,7 @@ class BiLSTM(object):
         return self.model.predict(X, verbose=1)
     
     def score(self, X, y, tag_inverse_transformer):
-        test_pred = self.predict(self, X)
+        test_pred = self.predict(X)
         pred_labels, test_labels = pred2label(test_pred, tag_inverse_transformer), pred2label(y, tag_inverse_transformer)
         
         print utils.get_accuracy(test_labels, pred_labels)
