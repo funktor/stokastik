@@ -120,9 +120,9 @@ def viterbi_decoding(emission_probs, transition_probs, start_probs, tag_inverse_
     
     for i in range(n):
         if i == 0:
-            viterbi_state[i] = emission_probs[i] + start_probs
+            viterbi_state[i] = emission_probs[i] * start_probs
         else:
-            viterbi_state[i] = np.max(np.add.outer(viterbi_state[i-1], emission_probs[i]) + transition_probs, axis=0)
+            viterbi_state[i] = np.max(np.multiply.outer(viterbi_state[i-1], emission_probs[i]) * transition_probs, axis=0)
     
     output_states = np.zeros(n)
     
@@ -131,7 +131,7 @@ def viterbi_decoding(emission_probs, transition_probs, start_probs, tag_inverse_
             output_states[i] = np.argmax(viterbi_state[i])
         else:
             nxt_state = int(output_states[i+1])
-            output_states[i] = np.argmax(viterbi_state[i] + emission_probs[i+1,nxt_state] + transition_probs[:,nxt_state])
+            output_states[i] = np.argmax(viterbi_state[i] * emission_probs[i+1,nxt_state] * transition_probs[:,nxt_state])
             
     output_states = [tag_inverse_transformer[int(x)] for x in output_states]
     
