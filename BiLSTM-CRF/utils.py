@@ -38,7 +38,7 @@ def get_sequence(labels):
             if labels[idx][0] == 'B' or labels[idx][0] == 'S':
                 last = idx
             seq_label[last] = idx
-    
+        
     return seq_label
 
 def get_classification_score(test_labels, pred_labels):

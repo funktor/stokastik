@@ -138,7 +138,7 @@ def get_data(items, item_text, num_tokens=50):
         if proc is not None:
             label = get_sequence_labels(text_chunks, get_tokens(proc), label, 'proc')
             
-        if len(label) > num_tokens:
+        if len(label) < num_tokens:
             n = num_tokens - len(label)
             labels.append(label + ['O']*n)
             sentences.append(text_chunks + ['PAD_TXT']*n)
@@ -203,9 +203,9 @@ class DataReader(object):
         self.tags = sorted(list(tags))
         
         print "Generating inverted indices for vocab and tags..."
-        self.word2idx = {w: i + 1 for i, w in enumerate(vocab)}
-        self.tag2idx = {w: i for i, w in enumerate(tags)}
-        self.idx2tag = {i: w for i, w in enumerate(tags)}
+        self.word2idx = {w: i + 1 for i, w in enumerate(self.vocab)}
+        self.tag2idx = {w: i for i, w in enumerate(self.tags)}
+        self.idx2tag = {i: w for i, w in enumerate(self.tags)}
         
         print "Preprocessing for LSTM..."
         sent_seq = [[self.word2idx[w] for w in s] for s in sentences]
