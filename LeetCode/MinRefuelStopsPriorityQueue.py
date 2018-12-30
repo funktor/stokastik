@@ -1,53 +1,70 @@
-import collections, heapq
+import collections
 
 class KeyedPriorityQueue(object):
     def __init__(self, heap):
         self.heap = heap
-        self.heap_ref = {(x[0], x[1]):i for i, x in enumerate(heap)}
+        self.heap_ref = {x[2]:i for i, x in enumerate(heap)}
             
     def getHeapSize(self):
         return len(self.heap)
     
+    def comparator(self, i, j):
+        n = len(self.heap)
+        
+        cond1 = i < n and j < n and self.heap[i][0] > self.heap[j][0]
+        cond2 = i < n and j < n and self.heap[i][0] == self.heap[j][0] and self.heap[i][1] < self.heap[j][1]
+        
+        return cond1 or cond2
+    
     def swap(self, i, j):
         x, y = self.heap[i], self.heap[j]
 
-        temp1, temp2 = x, self.heap_ref[(x[0], x[1])]
-        self.heap[i], self.heap_ref[(x[0], x[1])] = y, self.heap_ref[(y[0], y[1])]
-        self.heap[j], self.heap_ref[(y[0], y[1])] = temp1, temp2
+        temp1, temp2 = x, self.heap_ref[x[2]]
+        self.heap[i], self.heap_ref[x[2]] = y, self.heap_ref[y[2]]
+        self.heap[j], self.heap_ref[y[2]] = temp1, temp2
         
         return j
     
+    def adjust_parent(self, index):
+        while index > 0 and self.comparator(index/2, index):
+            index = self.swap(index, index/2)
+            
+    def adjust_child(self, index):
+        n = len(self.heap)
+        
+        while True:
+            a = 2*index+1 < n and self.comparator(index, 2*index+1)
+            b = 2*index+2 < n and self.comparator(index, 2*index+2)
+            
+            if a and b:
+                if self.comparator(2*index+1, 2*index+2):
+                    index = self.swap(index, 2*index+2)
+                else:
+                    index = self.swap(index, 2*index+1)
+            elif a:
+                index = self.swap(index, 2*index+1)
+            elif b:
+                index = self.swap(index, 2*index+2)
+            else:
+                break
+    
     def pop(self, index):
         out = self.heap[index]
-        self.heap_ref.pop((out[0], out[1]))
         
         if index < len(self.heap)-1:
             self.heap[index] = self.heap[-1]
             x = self.heap[index]
-            self.heap_ref[(x[0], x[1])] = index
+            self.heap_ref[x[2]] = index
         
         self.heap.pop()
+        self.heap_ref.pop(out[2])
         
         if index < len(self.heap):
-            curr_idx = index
-
-            if curr_idx > 0 and self.heap[curr_idx/2][0] > self.heap[curr_idx][0]:
-                while curr_idx > 0 and self.heap[curr_idx/2][0] < self.heap[curr_idx][0]:
-                    curr_idx = self.swap(curr_idx, curr_idx/2)
-
+            if index > 0 and self.comparator(index/2, index):
+                self.adjust_parent(index)
             else:
-                while True:
-                    a = 2*curr_idx+1 < len(self.heap) and self.heap[curr_idx][0] > self.heap[2*curr_idx+1][0]
-                    b = 2*curr_idx+2 < len(self.heap) and self.heap[curr_idx][0] > self.heap[2*curr_idx+2][0]
-
-                    if a or b:
-                        if a:
-                            curr_idx = self.swap(curr_idx, 2*curr_idx+1)
-                        else:
-                            curr_idx = self.swap(curr_idx, 2*curr_idx+2)
-                    else:
-                        break
-        
+                self.adjust_child(index)
+                
         return out
         
     def getValue(self, key):
@@ -58,53 +75,41 @@ class KeyedPriorityQueue(object):
     
     def setValue(self, key, value):
         if key in self.heap_ref:
-            i = self.heap_ref[key]
-            self.pop(i)
-
-            self.heap.append(value)
-            self.heap_ref[(value[0], value[1])] = len(self.heap)-1
-
-            curr_idx = len(self.heap)-1
-
-            while curr_idx > 0 and self.heap[curr_idx/2][0] > self.heap[curr_idx][0]:
-                curr_idx = self.swap(curr_idx, curr_idx/2)
+            self.pop(self.heap_ref[key])
+            self.addValue(value)
                 
     def addValue(self, value):
         self.heap.append(value)
-        self.heap_ref[(value[0], value[1])] = len(self.heap)-1
+        self.heap_ref[value[2]] = len(self.heap)-1
 
-        curr_idx = len(self.heap)-1
-
-        while curr_idx > 0 and self.heap[curr_idx/2][0] > self.heap[curr_idx][0]:
-            curr_idx = self.swap(curr_idx, curr_idx/2)
-            
+        self.adjust_parent(len(self.heap)-1)
 
 class Solution(object):
     def minRefuelStops(self, target, startFuel, stations):
         stations = [(0, startFuel)] + stations
         n = len(stations)
         
-        keyedPriorityQueue = KeyedPriorityQueue([(-1, 0, stations[0][1])])
+        keyedPriorityQueue = KeyedPriorityQueue([(-1, startFuel, 0)])
         
         while keyedPriorityQueue.getHeapSize() > 0:
-            step, curr_station_id, curr_fuel_capacity = keyedPriorityQueue.pop(0)
+            step, max_dist, curr_station_id = keyedPriorityQueue.pop(0)
             
-            if curr_fuel_capacity >= target-stations[curr_station_id][0]:
+            if max_dist >= target:
                 return step+1
-            
+
             for j in range(curr_station_id+1, n):
                 station_dist, station_fuel = stations[j]
-                
-                if curr_fuel_capacity >= station_dist-stations[curr_station_id][0]:
-                    a = curr_fuel_capacity-station_dist+stations[curr_station_id][0]+station_fuel
-                    q = keyedPriorityQueue.getValue((step+1, j))
-                    
+
+                if max_dist >= station_dist:
+                    a, q = max_dist+station_fuel, keyedPriorityQueue.getValue(j)
                     if q is not None:
-                        if a > q[2]:
-                            keyedPriorityQueue.setValue((step+1, j), (step+1, j, a))
+                        if a > q[1] and q[1] < target:
+                            keyedPriorityQueue.setValue(j, (step+1, a, j))
+                        else:
+                            break
                     else:
-                        keyedPriorityQueue.addValue((step+1, j, a))
+                        keyedPriorityQueue.addValue((step+1, a, j))
                 else:
                     break
-        
+                        
         return -1
