@@ -55,8 +55,6 @@ class Solution(object):
             
     def hitBricks(self, grid, hits):
         n, m = len(grid), len(grid[0])
-        out, counts = [], collections.defaultdict(int)
-        
         is_connected = dict()
         
         for x in range(len(grid)):
