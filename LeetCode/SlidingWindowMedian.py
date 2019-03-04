@@ -14,15 +14,10 @@ class Solution(object):
         heapq.heapify(max_heap)
         heapq.heapify(min_heap)
         
-        out = []
-        
-        if k % 2 == 0:
-            out.append((-max_heap[0][0] + min_heap[0][0])/2.0)
-        else:
-            out.append(float(min_heap[0][0]))
+        median = (-max_heap[0][0] + min_heap[0][0])/2.0 if k % 2 == 0 else float(min_heap[0][0])
+        out = [median]
             
         for i in range(k, len(nums)):
-            
             num, num_deleted = nums[i][0], nums[i-k][0]
 
             if num <= -max_heap[0][0]:
@@ -52,10 +47,8 @@ class Solution(object):
                 
             while min_heap[0][1] <= i-k:
                 heapq.heappop(min_heap)
-
-            if k % 2 == 0:
-                out.append((-max_heap[0][0] + min_heap[0][0])/2.0)
-            else:
-                out.append(float(min_heap[0][0]))
+                
+            median = (-max_heap[0][0] + min_heap[0][0])/2.0 if k % 2 == 0 else float(min_heap[0][0])
+            out.append(median)
         
         return out
