@@ -36,11 +36,8 @@ class Solution(object):
 
                 a3, b3 = s1[:pos], s1[pos:]
                 a4, b4 = s2[::-1][:pos], s2[::-1][pos:]
-
-                p1 = self.is_anagram(a1, a2) and self.is_anagram(b1, b2)
-                p2 = self.is_anagram(a3, a4) and self.is_anagram(b3, b4)
                 
-                if p1:
+                if self.is_anagram(a1, a2):
                     if (a1, a2) in cached:
                         x = cached[(a1, a2)]
                     else:
@@ -53,7 +50,7 @@ class Solution(object):
                         
                     z = x and y
 
-                elif p2:
+                elif self.is_anagram(a3, a4):
                     if (a3, a4) in cached:
                         x = cached[(a3, a4)]
                     else:
