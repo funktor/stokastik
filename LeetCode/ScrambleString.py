@@ -1,6 +1,9 @@
 import collections
 class Solution(object):
     def is_anagram(self, s1, s2):
+        if s1 == s2 or s1 == s2[::-1]:
+            return True
+        
         char_cnt1, char_cnt2 = collections.defaultdict(int), collections.defaultdict(int)
         
         for x in list(s1):
@@ -18,20 +21,16 @@ class Solution(object):
         return True
     
     def get_is_scrabled(self, s1, s2, cached):
-        n = len(s1)
+        cached[(s1, s2)] = False
         
-        if len(s1) != len(s2):
-            return False
+        if self.is_anagram(s1, s2) is False:
+            cached[(s1, s2)] = False
         
-        elif n == 1:
-            return s1 == s2
-        
-        elif n == 2:
-            return s1 == s2 or s1[::-1] == s2
+        elif s1 == s2 or s1 == s2[::-1]:
+            cached[(s1, s2)] = True
         
         else:
-            out = False
-            for pos in range(1, n):
+            for pos in range(1, len(s1)):
                 a1, b1 = s1[:pos], s1[pos:]
                 a2, b2 = s2[:pos], s2[pos:]
 
@@ -70,10 +69,11 @@ class Solution(object):
                 else:
                     z = False
                 
-                out = out or z
-                
-            cached[(s1, s2)] = out    
-            return out
+                if z:
+                    cached[(s1, s2)] = True
+                    break
+            
+        return cached[(s1, s2)]
     
     def isScramble(self, s1, s2):
         cached = dict()
