@@ -1,10 +1,9 @@
-import common_utils as utils
 from collections import defaultdict
 import numpy as np, random, re, math
 from sklearn.cluster import MiniBatchKMeans, KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
-from embeddings import DL_API
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
+import data_generator as dg
 
 class Grouping(object):
     def __init__(self, items, representations=None, similarity_threshold=1.0):
@@ -18,7 +17,7 @@ class Grouping(object):
         clusters = defaultdict(list)
 
         for idx in range(len(self.items)):
-            abs_pd_id = self.items[idx][6]
+            abs_pd_id = self.items[idx][5]
             clusters[abs_pd_id].append(idx)
 
         return clusters
@@ -35,15 +34,28 @@ class Grouping(object):
 
         return brands
     
-    def kmeans(self, brand_clusters):
+    def cluster_on_pts_abs_id(self):
+        pts = defaultdict(set)
+
+        for idx in range(len(self.items)):
+            pt, abs_id = self.items[idx][1], self.items[idx][5]
+            pts[pt].add(abs_id)
+
+        return pts
+    
+    def kmeans(self):
         clusters = defaultdict(list)
         label_start = 0
 
-        for brand, indexes in brand_clusters.items():
+        for pt, abs_ids in pre_clusters.items():
+            indexes = [groups[x][0] for abs_id in abs_ids]
+            for abs_id in abs_ids:
+                indexes += y
+                
             data = self.representations[indexes,:]
 
-            num_clusters = int(math.ceil(data.shape[0]/2.0))
-            kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=min(1000, data.shape[0]), init='k-means++')
+            num_clusters = int(0.5*len(abs_id_indexes))
+            kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=min(1000, data.shape[0]), init='k-means++', init_size=num_clusters+1)
             kmeans.fit(data)
 
             for idx in range(len(kmeans.labels_)):
@@ -53,58 +65,54 @@ class Grouping(object):
             label_start += max(kmeans.labels_) + 1
 
         return clusters
-
-    def approx_hierarchical(self, brand_clusters):
-        output_clusters, max_cluster_id = defaultdict(), 0
-
-        for brand, indexes in brand_clusters.items():
-            data = self.representations[indexes,:]
-            similarities = cosine_similarity(data, data)
-
-            thres_match = similarities >= self.confidence
-            pt_indexes = np.sum(thres_match.astype(int), axis=1).argsort()[::-1]
-
-            for idx in pt_indexes:
-                q_idx, cluster_id = indexes[idx], max_cluster_id
-
-                if q_idx not in output_clusters:
-                    rep = similarities[idx]
-                    most_similar = list(zip(rep, range(len(rep)))) if np.sum(rep) > 0 else []
-
-                    output_clusters[q_idx] = (cluster_id, 1.0, q_idx)
-
-                    if len(most_similar) > 0:
-                        most_similar = [(x, indexes[y]) for x, y in most_similar if indexes[y] != q_idx and x >= self.confidence]
-
-                        for sim, index in most_similar:
-                            if index not in output_clusters or (index in output_clusters and output_clusters[index][1] < sim):
-                                output_clusters[index] = (cluster_id, sim, q_idx)
-
-                    max_cluster_id += 1
-
-        clusters = defaultdict(list)
-
-        for pt, cluster in output_clusters.items():
-            clusters[cluster[2]].append(pt)
-
-        return clusters
     
     def auto_grouping(self):
-        item_text = utils.get_text_data(self.items)
+        try:
+            groups = self.true_grouping()
         
-        if self.representations is None:
-            tfidf_vectorizer = TfidfVectorizer(tokenizer=utils.get_tokens, ngram_range=(1,1), stop_words='english', binary=True)
-            self.representations = tfidf_vectorizer.fit_transform(item_text)
+            pre_clusters = self.cluster_on_pts_abs_id()
+            pt_cluster_ids, pt_clusters = defaultdict(dict), defaultdict(dict)
+
+            for pt, abs_ids in pre_clusters.items():
+                print(pt)
+                print(len(abs_ids))
+                
+                abs_ids = list(abs_ids)
+                item_text = []
+                for abs_id in abs_ids:
+                    x = groups[abs_id][0]
+                    item_text.append(dg.get_item_text(self.items[x]))
+
+                embeds_file = tables.open_file('data/w2v_embeddings.h5', mode='r')
+                data = embeds_file.root.data
+
+                num_clusters = int(0.5*len(abs_ids))
+                kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=min(1000, data.shape[0]), init='k-means++', init_size=num_clusters+1)
+                kmeans.fit(data)
+
+                for i, label in enumerate(kmeans.labels_):
+                    pt_cluster_ids[pt][abs_ids[i]] = label
+
+                    if label not in pt_clusters[pt]:
+                        pt_clusters[pt][label] = []
+
+                    pt_clusters[pt][label].append(abs_ids[i])
+
+            dg.save_data_pkl(pt_cluster_ids, 'pt_cluster_ids.pkl')
+            dg.save_data_pkl(pt_clusters, 'pt_clusters.pkl')
+
+            return pt_cluster_ids, pt_clusters
+                
+        finally:
+            embeds_file.close()
             
-        brand_clusters = self.cluster_on_brands()
         
-        return self.approx_hierarchical(brand_clusters)
         
     def init_groups(self):
-        print "Getting actual groups..."
+        print("Getting actual groups...")
         self.true_groups = self.true_grouping()
         
-        print "Getting auto groups..."
+        print("Getting auto groups...")
         self.auto_groups = self.auto_grouping()
 
     def get_cluster_score(self, cluster):
