@@ -33,7 +33,7 @@ def save_imgs(generator, epoch, noise_shape):
             axs[i,j].imshow(gen_imgs[cnt, :,:,:])
             axs[i,j].axis('off')
             cnt += 1
-    fig.savefig("images/placeholders_%d.png" % epoch)
+    fig.savefig("images/gan_%d.png" % epoch)
     plt.close()
 
 def build_generator(noise_shape=(128,)):
@@ -91,8 +91,8 @@ def build_stacked_model(generator, discriminator, noise_shape):
     return stacked_model
     
 def train_gan(num_epochs=10000, batch_size=32):
-    placeholder_data = dg.load_data_npy('placeholder_images_data.npy')
-    img_shape = (placeholder_data.shape[1], placeholder_data.shape[2], placeholder_data.shape[3])
+    image_data = dg.load_data_npy('train_siamese_image_data.npy')
+    img_shape = (image_data.shape[1], image_data.shape[2], image_data.shape[3])
     print("Shape=", img_shape)
     noise_shape=(100,)
     
@@ -100,7 +100,7 @@ def train_gan(num_epochs=10000, batch_size=32):
     generator = build_generator(noise_shape)
     stacked_model = build_stacked_model(generator, discriminator, noise_shape)
     
-    n = placeholder_data.shape[0]
+    n = image_data.shape[0]
     
     num_batches, half_batch = int(math.ceil(float(n)/batch_size)), int(batch_size/2)
     
@@ -113,8 +113,8 @@ def train_gan(num_epochs=10000, batch_size=32):
             fake_images = generator.predict(noise)
             fake_labels = np.zeros((half_batch, 1))
             
-            rand_indices = np.random.randint(0, placeholder_data.shape[0], half_batch)
-            real_images = placeholder_data[rand_indices]
+            rand_indices = np.random.randint(0, n, half_batch)
+            real_images = image_data[rand_indices]
             real_labels = np.ones((half_batch, 1))
 
             d_loss_real = discriminator.train_on_batch(real_images, real_labels)
