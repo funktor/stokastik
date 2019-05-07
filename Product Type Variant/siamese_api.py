@@ -52,7 +52,7 @@ class SiameseAPI(object):
         self.model.init_model()
         self.model.load()
         
-        weight, bias = self.model.model.layers[7].get_weights()
+        weight, bias = self.model.model.layers[9].get_weights()
         return -float(bias[0]+math.log((1.0/threshold)-1.0))/weight[0][0]
     
     def insert_embeddings_pytables(self):

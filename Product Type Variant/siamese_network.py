@@ -1,6 +1,7 @@
 import keras, os
 from keras.models import Model, Input
 from keras.layers import LSTM, Embedding, Dense, Bidirectional, InputSpec, Lambda, Average, CuDNNLSTM, Flatten, TimeDistributed, Dropout
+from keras.layers.convolutional import Conv1D, MaxPooling1D
 from keras.models import load_model
 import numpy as np
 import keras.backend as K
@@ -13,6 +14,7 @@ import data_generator as dg
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras import optimizers
 import constants as cnt
+from keras.layers.normalization import BatchNormalization
 
 class AttentionLayer(Layer):
     def __init__(self, **kwargs):
@@ -46,6 +48,60 @@ class AttentionLayer(Layer):
         else:
             return None
         
+def my_init(shape, dtype=None):
+    return K.constant(1.0/shape[0], shape=(shape[0], 1), name='init_constant')
+        
+        
+class WeightedL2Layer(Layer):
+    def __init__(self, **kwargs):
+        self.supports_masking = True
+        super(WeightedL2Layer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.kernel = self.add_weight(name='kernel_1', shape=(input_shape[0][1], 1), initializer=my_init, trainable=True)
+        super(WeightedL2Layer, self).build(input_shape)
+
+    def call(self, x):
+        return K.sqrt(K.maximum(K.dot(K.square(x[0]-x[1]), K.square(self.kernel)), K.epsilon()))
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0][0], 1)
+    
+    def get_output_shape_for(self, input_shape):
+        return self.compute_output_shape(input_shape)
+    
+    def compute_mask(self, input, input_mask=None):
+        if isinstance(input_mask, list):
+            return [None] * len(input_mask)
+        else:
+            return None
+        
+        
+class WeightedAverageEmbeds(Layer):
+    def __init__(self, **kwargs):
+        self.supports_masking = True
+        super(WeightedAverageEmbeds, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.kernel = self.add_weight(name='kernel_2', shape=(input_shape[1], 1), initializer=my_init, trainable=True)
+        super(WeightedAverageEmbeds, self).build(input_shape)
+
+    def call(self, x):
+        return K.mean(x * self.kernel, axis=1)
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[2])
+    
+    def get_output_shape_for(self, input_shape):
+        return self.compute_output_shape(input_shape)
+    
+    def compute_mask(self, input, input_mask=None):
+        if isinstance(input_mask, list):
+            return [None] * len(input_mask)
+        else:
+            return None
+        
+        
 class SiameseNet(object):
     def __init__(self, vocab_size, training_samples=5000, validation_samples=5000, testing_samples=5000, use_generator=True):
         self.model = None
@@ -64,7 +120,7 @@ class SiameseNet(object):
         nlayer1 = nlayer(input1)
         nlayer2 = nlayer(input2)
         
-        nlayer = Flatten()
+        nlayer = WeightedAverageEmbeds()
         
         nlayer1 = nlayer(nlayer1)
         nlayer2 = nlayer(nlayer2)
@@ -74,17 +130,28 @@ class SiameseNet(object):
         nlayer1 = nlayer(nlayer1)
         nlayer2 = nlayer(nlayer2)
         
+        nlayer = Dropout(0.1)
+        
+        nlayer1 = nlayer(nlayer1)
+        nlayer2 = nlayer(nlayer2)
+        
+        nlayer = BatchNormalization()
+        
+        nlayer1 = nlayer(nlayer1)
+        nlayer2 = nlayer(nlayer2)
+        
         nlayer = Lambda(lambda x: K.l2_normalize(x, axis=1))
         
         nlayer1 = nlayer(nlayer1)
         nlayer2 = nlayer(nlayer2)
         
-        merge = Lambda(lambda x: K.sqrt(K.maximum(K.sum(K.square(x[0]-x[1]), axis=1, keepdims=True), K.epsilon())))([nlayer1, nlayer2])
+        merge = Lambda(lambda x: K.sqrt(K.sum(K.square(x[0]-x[1]), axis=1, keepdims=True)))([nlayer1, nlayer2])
+        
         out = Dense(1, activation="sigmoid")(merge)
 
         self.model = Model([input1, input2], out)
         adam = optimizers.Adam(lr=0.001)
-        self.model.compile(optimizer=adam, loss='binary_crossentropy', metrics=['accuracy'])
+        self.model.compile(optimizer=adam, loss='mean_squared_error', metrics=['accuracy'])
         
     def fit(self):
         self.init_model()
@@ -145,5 +212,5 @@ class SiameseNet(object):
         print(classification_report(test_labels, pred_labels))
     
     def get_embeddings(self, X):
-        embeddings = K.function([self.model.layers[0].input, self.model.layers[1].input], [self.model.layers[5].get_output_at(0)])
+        embeddings = K.function([self.model.layers[0].input, self.model.layers[1].input], [self.model.layers[7].get_output_at(0)])
         return embeddings([X, X])[0]

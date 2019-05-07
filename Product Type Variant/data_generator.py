@@ -4,14 +4,22 @@ import numpy as np, math, random
 from sklearn.model_selection import train_test_split
 from sklearn.metrics.pairwise import euclidean_distances
 from multiprocessing.dummy import Pool as ThreadPool
+from multiprocessing import Pool
 from gensim.models import Word2Vec
 import constants as cnt
 
-items = gutils.load_data_pkl(cnt.ITEMS_FILE)
-groups = gutils.abstract_groups(items)
-group_indices = gutils.load_data_pkl(cnt.GROUP_INDICES_FILE)
-kdtree = gutils.load_data_pkl(cnt.WV_KD_TREE_FILE)
-wv_model = Word2Vec.load(os.path.join(cnt.DATA_FOLDER, cnt.WV_MODEL_FILE))
+if os.path.exists(os.path.join(cnt.DATA_FOLDER, cnt.ITEMS_FILE)):
+    items = gutils.load_data_pkl(cnt.ITEMS_FILE)
+    groups = gutils.abstract_groups(items)
+
+if os.path.exists(os.path.join(cnt.DATA_FOLDER, cnt.GROUP_INDICES_FILE)):
+    group_indices = gutils.load_data_pkl(cnt.GROUP_INDICES_FILE)
+    
+if os.path.exists(os.path.join(cnt.DATA_FOLDER, cnt.WV_KD_TREE_FILE)):
+    kdtree = gutils.load_data_pkl(cnt.WV_KD_TREE_FILE)
+    
+if os.path.exists(os.path.join(cnt.DATA_FOLDER, cnt.WV_MODEL_FILE)):
+    wv_model = Word2Vec.load(os.path.join(cnt.DATA_FOLDER, cnt.WV_MODEL_FILE))
 
 def create_sent_tokens_array():
     try:
@@ -76,12 +84,12 @@ def generate_group_data(abs_id, next_abs_id, embeds, pt):
     if len(neg_items) == 0:
         neg_items = groups[next_abs_id]
 
-    neg_items = random.sample(neg_items, min(len(neg_items), cnt.NUM_PAIRS_PER_GROUP))
+    h = min(len(neg_items), len(curr_items), cnt.NUM_PAIRS_PER_GROUP)
+    neg_items = random.sample(neg_items, h)
     
     neg_data_pairs = [(curr_items[x], neg_items[x], 0) for x in range(len(neg_items))]
     
     return pos_data_pairs, neg_data_pairs
-        
 
 def generate_data(test_pct=0.2, validation_pct=0.2):
     pt_abs_id_map = gutils.get_pt_abs_id_map(items)
@@ -95,7 +103,7 @@ def generate_data(test_pct=0.2, validation_pct=0.2):
             print(len(selected_abs_ids))
             random.shuffle(selected_abs_ids)
             group_embeds = {abs_id:gutils.get_wv_embeddings(groups[abs_id]) for abs_id in selected_abs_ids}
-            
+                
             pool = ThreadPool(cnt.NUM_THREADS)
             pt_data_pairs = pool.map(lambda x: generate_group_data(x[1], selected_abs_ids[(x[0]+1)%n], group_embeds[x[1]], pt), enumerate(selected_abs_ids))
             pool.close()
@@ -129,7 +137,7 @@ def get_data_as_generator(num_samples, prefix='train'):
         items1, items2, labels = zip(*data_pairs)
         items1, items2, labels = np.array(items1), np.array(items2), np.array(labels)
 
-        n = min(num_samples, len(data_pairs))
+        n = len(data_pairs)
         num_batches = int(math.ceil(float(n)/cnt.SIAMESE_BATCH_SIZE))
 
         batch_num = 0

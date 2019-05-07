@@ -1,7 +1,8 @@
-import pickle, os, re, numpy as np, gensim, time
+import pickle, os, re, numpy as np, gensim, time, sys
 import pandas as pd, math, collections, random, tables
 from sklearn.model_selection import train_test_split
 from multiprocessing.dummy import Pool as ThreadPool
+from multiprocessing import Pool
 from nltk.tokenize import RegexpTokenizer
 from nltk.corpus import stopwords
 from nltk.stem.wordnet import WordNetLemmatizer
@@ -11,6 +12,11 @@ from gensim.models import Word2Vec
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
 import constants as cnt
+# from scipy.spatial import cKDTree, KDTree
+from nearest_neighbors.kdtree import KDTree
+from nearest_neighbors.product_quantization import PQ
+
+sys.setrecursionlimit(100000)
 
 def save_product_data():
     df_chunk = pd.read_csv('data/pcf_dump.tsv', sep='\\t', engine='python', encoding='utf-8')
@@ -22,8 +28,7 @@ def save_product_data():
                             list(df_chunk['short_description']), 
                             list(df_chunk['abstract_product_id']), 
                             list(df_chunk['brand']), 
-                            list(df_chunk['size']), 
-                            list(df_chunk['color'])))
+                            list(df_chunk['product_id'])))
     print(len(product_data))
 
     save_data_pkl(product_data, 'product_data.pkl')
@@ -34,6 +39,17 @@ def save_unique_items():
     items = get_unique_items_pt(product_data)
     save_data_pkl(items, cnt.ITEMS_FILE)
     print(len(items))
+    
+    
+def get_product_id_inverted_index():
+    items = load_data_pkl(cnt.ITEMS_FILE)
+    inv_index = dict()
+    for i in range(len(items)):
+        product_id = items[i][7]
+        inv_index[product_id] = i
+    
+    return inv_index
+    
     
 def abstract_groups(items):
     clusters = defaultdict(list)
@@ -107,16 +123,58 @@ def load_data_pkl(path):
         return pickle.load(f)
 
 def construct_kd_tree(vectors, save_file=cnt.SIAMESE_KD_TREE_FILE):
-    kdtree = KDTree(vectors, leaf_size=cnt.KD_TREE_LEAF_SIZE)
-    save_data_pkl(kdtree, save_file)
+    kdtree = KDTree(vectors=vectors, leafsize=cnt.KD_TREE_LEAF_SIZE)
+    kdtree.construct()
+    return kdtree
+    
+def construct_kd_tree_per_PT(vectors, product_types, save_file=cnt.SIAMESE_KD_TREE_FILE):
+    pt_indices = collections.defaultdict(list)
+    for i in range(len(product_types)):
+        pt_indices[product_types[i]].append(i)
+        
+    pool = ThreadPool(5)
+    out = pool.map(lambda x: (x[0], construct_kd_tree(vectors[x[1],:])), pt_indices.items())
+    pool.close()
+    pool.join()
+    
+    tree = {x[0]:x[1] for x in out}
+    save_data_pkl(tree, save_file)
     
 def get_nearest_neighbors_radius(kdtree, query_vector, query_radius):
-    nearest = kdtree.query_radius([query_vector], r=query_radius)
-    return nearest[0]
+    nearest = kdtree.query_radius(query_vector, radius=query_radius)
+    return [y for x, y in nearest]
 
 def get_nearest_neighbors_count(kdtree, query_vector, count):
-    dist, nearest = kdtree.query([query_vector], k=count)
-    return dist[0], nearest[0]
+    nearest = kdtree.query_count(query_vector, k=count)
+    return list(zip(*nearest))
+
+def construct_product_quantizer(vectors, num_partitions, num_codewords):
+    print(vectors.shape[0])
+    k = num_codewords if vectors.shape[0] > num_codewords else 1
+    pq = PQ(num_partitions=num_partitions, num_codewords_per_partition=k)
+    pq.construct(vectors)
+    return pq
+    
+def construct_product_quantizer_per_PT(vectors, product_types, save_file=cnt.SIAMESE_PQ_FILE):
+    pt_indices = collections.defaultdict(list)
+    for i in range(len(product_types)):
+        pt_indices[product_types[i]].append(i)
+        
+    pool = ThreadPool(5)
+    out = pool.map(lambda x: (x[0], construct_product_quantizer(vectors[x[1],:], cnt.PQ_PARTITIONS, cnt.NUM_CODEWORDS_PER_PARTITION)), pt_indices.items())
+    pool.close()
+    pool.join()
+    
+    pq = {x[0]:x[1] for x in out}
+    save_data_pkl(pq, save_file)
+    
+def get_nearest_neighbors_radius_pq(pq, query_vector, query_radius):
+    nearest = pq.query_radius(query_vector, radius=query_radius)
+    return [y for x, y in nearest]
+
+def get_nearest_neighbors_count_pq(pq, query_vector, count):
+    nearest = pq.query_count(query_vector, k=count)
+    return list(zip(*nearest))
 
 def benchmark_kdtree(kdtree, query_radius, num_samples=10000):
     items = load_data_pkl(cnt.ITEMS_FILE)
