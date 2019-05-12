@@ -1,4 +1,4 @@
-import hashlib, itertools, json, pickle, cv2, math, io, time, sys, requests
+import hashlib, itertools, json, pickle, cv2, math, io, time, sys, requests, re
 from urllib.parse import urlparse, urlunparse, urljoin, urlencode
 import pandas as pd, functools, urllib, urllib.request, urllib.error
 import collections, os, random, numpy as np, glob, random, itertools
@@ -257,33 +257,31 @@ def load_data_pkl(path):
         return pickle.load(f, encoding='latin1')
     
     
-def get_siamese_data(product_images_path, train_placeholder_images_path, test_placeholder_images_path):
+def get_siamese_data():
     image_size = cnt.IMAGE_SIZE
     
-    product_type_dirs = glob.glob(os.path.join(product_images_path, "*/"))
+    product_type_dirs = glob.glob(os.path.join(cnt.PRODUCT_IMAGES_PATH, "*/"))
 
-    train_placeholders = glob.glob(os.path.join(train_placeholder_images_path, "*.*"))
-    test_placeholders = glob.glob(os.path.join(test_placeholder_images_path, "*.*"))
+    train_placeholders = glob.glob(os.path.join(cnt.TAGGED_PLACEHOLDER_IMAGES_PATH, "*.*"))
+    test_placeholders = glob.glob(os.path.join(cnt.TEST_PLACEHOLDER_IMAGES_PATH, "*.*"))
 
-    train_urls, valid_urls, test_urls = [], [], []
+    train_urls, valid_urls = [], []
 
-    train_pt_url_map, valid_pt_url_map, test_pt_url_map = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
-    train_url_pt_map, valid_url_pt_map, test_url_pt_map = dict(), dict(), dict()
+    train_pt_url_map, valid_pt_url_map = collections.defaultdict(list), collections.defaultdict(list)
+    train_url_pt_map, valid_url_pt_map = dict(), dict()
 
     for pt_dir in product_type_dirs:
         curr_urls = glob.glob(os.path.join(pt_dir, "*.*"))
         pt = re.sub('.*\\/(.*?)\\/$', '\\1', pt_dir)
 
         x, y = train_test_split(curr_urls, test_size=0.2)
-        x, z = train_test_split(x, test_size=0.15)
 
         train_urls += zip(x, [pt]*len(x))
-        valid_urls += zip(z, [pt]*len(z))
-        test_urls += zip(y, [pt]*len(y))
+        valid_urls += zip(y, [pt]*len(y))
 
-    print(len(train_urls), len(valid_urls), len(test_urls))
+    print(len(train_urls), len(valid_urls))
 
-    train_img_data = np.empty((len(train_urls), image_size, image_size, 3))
+    train_img_data = np.empty((len(train_urls), image_size, image_size, 3), np.float32)
 
     for i in range(len(train_urls)):
         img_path, pt = train_urls[i]
@@ -295,7 +293,7 @@ def get_siamese_data(product_images_path, train_placeholder_images_path, test_pl
     save_data_pkl(train_pt_url_map, cnt.TRAIN_PT_URL_MAP_FILE)
     save_data_pkl(train_url_pt_map, cnt.TRAIN_URL_PT_MAP_FILE)
 
-    valid_img_data = np.empty((len(valid_urls), image_size, image_size, 3))
+    valid_img_data = np.empty((len(valid_urls), image_size, image_size, 3), np.float32)
 
     for i in range(len(valid_urls)):
         img_path, pt = valid_urls[i]
@@ -306,18 +304,6 @@ def get_siamese_data(product_images_path, train_placeholder_images_path, test_pl
     save_data_npy(valid_img_data, cnt.VALID_IMAGE_DATA_FILE)
     save_data_pkl(valid_pt_url_map, cnt.VALID_PT_URL_MAP_FILE)
     save_data_pkl(valid_url_pt_map, cnt.VALID_URL_PT_MAP_FILE)
-
-    test_img_data = np.empty((len(test_urls), image_size, image_size, 3))
-
-    for i in range(len(test_urls)):
-        img_path, pt = test_urls[i]
-        test_pt_url_map[pt].append(i)
-        test_url_pt_map[i] = pt
-        test_img_data[i] = img_to_array(load_img(img_path).resize((image_size, image_size)))/255.0
-
-    save_data_npy(test_img_data, cnt.TEST_IMAGE_DATA_FILE)
-    save_data_pkl(test_pt_url_map, cnt.TEST_PT_URL_MAP_FILE)
-    save_data_pkl(test_url_pt_map, cnt.TEST_URL_PT_MAP_FILE)
 
     train_placeholders_data = [img_to_array(load_img(img_path).resize((image_size, image_size)))/255.0 for img_path in train_placeholders]
     test_placeholders_data = [img_to_array(load_img(img_path).resize((image_size, image_size)))/255.0 for img_path in test_placeholders]
@@ -339,13 +325,12 @@ def get_sampled_train_data():
         q += len(train_pt_url_map[pt])
         sampled += w
     
-    train_image_data = train_image_data[sampled]
-    
-    return train_image_data, train_pt_url_map
+    return train_image_data[sampled], train_pt_url_map
 
     
 def get_sampled_voting_data():
-    train_image_data, train_pt_url_map = get_sampled_train_data()
+    train_image_data = load_data_npy(cnt.TRAIN_IMAGE_DATA_FILE)
+    train_pt_url_map = load_data_pkl(cnt.TRAIN_PT_URL_MAP_FILE)
     
     voting_data = dict()
     

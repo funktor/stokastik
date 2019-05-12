@@ -49,11 +49,13 @@ def multi_input_generator_streaming(data_generator, batch_size, mode='train', im
             else:
                 yield batch_data
                 
+                
 def contrastive_loss(y_true, y_pred):
     margin = 1
     square_pred = K.square(y_pred)
     margin_square = K.square(K.maximum(margin - y_pred, 0))
     return K.mean(y_true * square_pred + (1 - y_true) * margin_square)
+
 
 def custom_accuracy(y_true, y_pred):
     return K.mean(K.equal(y_true, K.cast(y_pred < 0.5, y_true.dtype)))
@@ -64,30 +66,20 @@ def get_shared_model(image_shape):
     n_layer = input
     
     n_layer = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
     n_layer = BatchNormalization()(n_layer)
     n_layer = MaxPooling2D(pool_size=(2, 2))(n_layer)
     
     n_layer = Conv2D(filters=128, kernel_size=(3, 3), activation='relu')(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
     n_layer = BatchNormalization()(n_layer)
     n_layer = MaxPooling2D(pool_size=(2, 2))(n_layer)
     
     n_layer = Conv2D(filters=256, kernel_size=(3, 3), activation='relu')(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
     n_layer = BatchNormalization()(n_layer)
     n_layer = MaxPooling2D(pool_size=(2, 2))(n_layer)
     
     n_layer = Conv2D(filters=256, kernel_size=(3, 3), activation='relu')(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
     n_layer = BatchNormalization()(n_layer)
     n_layer = MaxPooling2D(pool_size=(2, 2))(n_layer)
-
-    n_layer = Flatten()(n_layer)
-    
-    n_layer = Dense(cnt.EMBEDDING_SIZE)(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
-    n_layer = BatchNormalization()(n_layer)
     
     model = Model(inputs=[input], outputs=[n_layer])
     return model
@@ -105,7 +97,6 @@ def get_shared_model_vgg(image_shape):
     n_layer = Flatten()(n_layer)
     
     n_layer = Dense(cnt.EMBEDDING_SIZE)(n_layer)
-    n_layer = Dropout(0.1)(n_layer)
     n_layer = BatchNormalization()(n_layer)
     
     model = Model(inputs=[input], outputs=[n_layer])
@@ -142,8 +133,43 @@ class WeightedL2Layer(Layer):
 
 class SiameseModel(object):
     def __init__(self):
+        self.classifier = None
         self.model = None
+        self.base_model = None
         self.datagen = None
+        
+        
+    def init_classifier(self):
+        image_shape = (IMAGE_HEIGHT, IMAGE_WIDTH, 3)
+        
+        self.datagen = ImageDataGenerator(rotation_range=20,
+                                          width_shift_range=0.15, 
+                                          height_shift_range=0.15, 
+                                          zoom_range=0.1, 
+                                          horizontal_flip = True,
+                                          vertical_flip = True,
+                                          fill_mode='nearest')
+        
+        input = Input(shape=image_shape)
+        
+        if cnt.USE_VGG:
+            self.base_model = get_shared_model_vgg(image_shape)
+        else:
+            self.base_model = get_shared_model(image_shape)
+            
+        n_layer = self.base_model(input)
+        
+        n_layer = Flatten()(n_layer)
+        n_layer = Dense(cnt.EMBEDDING_SIZE, activation='relu')(n_layer)
+        n_layer = BatchNormalization()(n_layer)
+        
+        out = Dense(cnt.NUM_PTS, activation="softmax")(n_layer)
+        
+        self.classifier = Model(inputs=[input], outputs=[out])
+
+        adam = optimizers.Adam(lr=0.001)
+        self.classifier.compile(optimizer=adam, loss="categorical_crossentropy", metrics=['accuracy'])
+        
         
     def init_model(self):
         image_shape = (IMAGE_HEIGHT, IMAGE_WIDTH, 3)
@@ -163,26 +189,64 @@ class SiameseModel(object):
         else:
             shared_model = get_shared_model(image_shape)
             
-        shared_model_a, shared_model_b = shared_model(input_a), shared_model(input_b)
+        if cnt.PRE_TRAIN_CLASSIFIER:
+            self.init_classifier()
+            self.classifier.load_weights(cnt.CLASSIFIER_MODEL_PATH)
+            
+            shared_model.set_weights(self.classifier.layers[1].get_weights())
+            
+            for layer in shared_model.layers:
+                layer.trainable = False
+            
+        nlayer1 = shared_model(input_a)
+        nlayer2 = shared_model(input_b)
+        
+        n_layer = Flatten()
+        nlayer1 = n_layer(nlayer1)
+        nlayer2 = n_layer(nlayer2)
+        
+        n_layer = Dense(cnt.EMBEDDING_SIZE, activation='relu')
+        nlayer1 = n_layer(nlayer1)
+        nlayer2 = n_layer(nlayer2)
+        
+        n_layer = BatchNormalization()
+        nlayer1 = n_layer(nlayer1)
+        nlayer2 = n_layer(nlayer2)
         
         n_layer = Lambda(lambda x: K.l2_normalize(x, axis=1))
+        nlayer1 = n_layer(nlayer1)
+        nlayer2 = n_layer(nlayer2)
         
-        shared_model_a = n_layer(shared_model_a)
-        shared_model_b = n_layer(shared_model_b)
-        
-        n_layer = Lambda(lambda x: K.sqrt(K.sum(K.square(x[0]-x[1]), axis=1, keepdims=True)))([shared_model_a, shared_model_b])
+        n_layer = Lambda(lambda x: K.sqrt(K.sum(K.square(x[0]-x[1]), axis=1, keepdims=True)))([nlayer1, nlayer2])
         out = Dense(1, activation="sigmoid")(n_layer)
 
         self.model = Model(inputs=[input_a, input_b], outputs=[out])
 
         adam = optimizers.Adam(lr=0.001)
         self.model.compile(optimizer=adam, loss="mean_squared_error", metrics=['accuracy', km.precision(label=0), km.recall(label=0)])
+        
+        
     
     def fit(self):
+        if cnt.PRE_TRAIN_CLASSIFIER:
+            self.init_classifier()
+
+            callbacks = [
+                ModelCheckpoint(filepath=cnt.CLASSIFIER_MODEL_PATH)
+            ]
+
+            train_num_batches = int(math.ceil(float(cnt.TRAINING_SAMPLES_PER_EPOCH)/cnt.CLASSIFIER_BATCH_SIZE))
+
+            self.classifier.fit_generator(multi_input_generator_streaming(dg.get_image_data_classifier(cnt.TRAINING_SAMPLES_PER_EPOCH), 
+                                                                     cnt.CLASSIFIER_BATCH_SIZE, 
+                                                                     mode='train'),
+                                     callbacks=callbacks, 
+                                     steps_per_epoch=train_num_batches,
+                                     epochs=cnt.CLASSIFIER_NUM_EPOCHS, verbose=1)
+        
         self.init_model()
         
         callbacks = [
-#             EarlyStopping(monitor='loss', patience=5),
             ModelCheckpoint(filepath=cnt.SIAMESE_BEST_MODEL_PATH, monitor='val_loss', save_best_only=True),
             ModelCheckpoint(filepath=cnt.SIAMESE_MODEL_PATH)
         ]
@@ -211,8 +275,8 @@ class SiameseModel(object):
         return np.rint(preds).astype(int)
     
     def score(self):
-        data_generator, test_labels, pred_labels = dg.get_image_data_siamese(cnt.TESTING_SAMPLES_PER_EPOCH, 'test'), [], []
-        total_batches = int(math.ceil(float(cnt.TESTING_SAMPLES_PER_EPOCH)/cnt.SIAMESE_BATCH_SIZE))
+        data_generator, test_labels, pred_labels = dg.get_image_data_siamese(cnt.VALIDATION_SAMPLES_PER_EPOCH, 'valid'), [], []
+        total_batches = int(math.ceil(float(cnt.VALIDATION_SAMPLES_PER_EPOCH)/cnt.SIAMESE_BATCH_SIZE))
         
         num_batches = 0
         for batch_data, batch_labels in data_generator:
@@ -254,9 +318,9 @@ class SiameseModel(object):
             self.model.load_weights(cnt.SIAMESE_MODEL_PATH)
             
     def get_embeddings(self, X):
-        embeddings = K.function([self.model.layers[0].input, self.model.layers[1].input], [self.model.layers[3].get_output_at(0)])
+        embeddings = K.function([self.model.layers[0].input, self.model.layers[1].input], [self.model.layers[6].get_output_at(0)])
         return embeddings([X, X])[0]
     
     def get_distance_threshold(self):
-        weight, bias = self.model.layers[5].get_weights()
+        weight, bias = self.model.layers[8].get_weights()
         return -float(bias[0]+math.log((1.0/cnt.PLACEHOLDER_THRESHOLD)-1.0))/weight[0][0], weight[0][0]

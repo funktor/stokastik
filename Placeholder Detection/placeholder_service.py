@@ -1,6 +1,6 @@
 from hashing_service import HashingService
 from siamese_service import SiameseService
-import json, logging
+import json, logging, collections, time
 import utilities as utils
 
 class PlaceholderService(object):
@@ -24,34 +24,80 @@ class PlaceholderService(object):
         self.hash_service.load()
         self.siam_service.load()
         
-    def predict(self, urls):
+    def predict(self, request):
         try:
             self.load()
+            
+            url_identifiers = dict()
+            for req in request:
+                for url in req['secondaryURL']:
+                    url_identifiers[url] = {'url': url, 
+                                            'product_type':req['product_type'], 
+                                            'productId':req['product_id'], 
+                                            'itemId':req['item_id'], 
+                                            'imageType':'secondaryURL', 
+                                            'tenantId': '0', 
+                                            'classification_tag': '',
+                                            'classifierType': '',
+                                            'classifierVersion': '2.0', 
+                                            'imageDownloadTimeInSecs': 0,
+                                            'processingTimeInSecs': 0,
+                                            'source': 'Placeholder', 
+                                            'tags':{}}
+                    
+                for url in req['primaryURL']:
+                    url_identifiers[url] = {'url': url, 
+                                            'product_type':req['product_type'], 
+                                            'productId':req['product_id'], 
+                                            'itemId':req['item_id'], 
+                                            'imageType':'primaryURL', 
+                                            'tenantId': '0', 
+                                            'classification_tag': '',
+                                            'classifierType': '',
+                                            'classifierVersion': '2.0', 
+                                            'imageDownloadTimeInSecs': 0,
+                                            'processingTimeInSecs': 0,
+                                            'source': 'Placeholder', 
+                                            'tags':{}}
 
-            imgs = [utils.image_url_to_obj(url) for url in urls]
+            urls = list(url_identifiers.keys())
             
-            prediction = json.loads(self.hash_service.predict(urls, imgs))
+            imgs, valid_urls = [], []
+            for url in urls:
+                start = time.time()
+                img = utils.image_url_to_obj(url)
+                duration = time.time()-start
+                
+                if isinstance(img, int) is False:
+                    imgs.append(img)
+                    url_identifiers[url]['imageDownloadTimeInSecs'] = duration
+                    valid_urls.append(url)
             
-            if prediction['status'] == 'failure':
+            prediction = self.hash_service.predict(valid_urls, imgs, url_identifiers)
+            
+            if prediction == 0:
                 return json.dumps({'status':'failure', 'message':'Some error occurred'})
             
             else:
-                output = prediction['output']
-                pl_output = [out for out in output if out['label'] == 1]
+                img_arrs, valid_urls2 = [], []
                 
-                non_pl_indices = [out['index'] for out in output if out['label'] == 0]
+                for i in range(len(imgs)):
+                    if len(url_identifiers[valid_urls[i]]['tags']) == 0:
+                        start = time.time()
+                        img_arr = utils.image_to_array(imgs[i])
+                        duration = time.time()-start
+                        
+                        if isinstance(img_arr, int) is False:
+                            img_arrs.append(img_arr)
+                            url_identifiers[valid_urls[i]]['processingTimeInSecs'] += duration
+                            valid_urls2.append(valid_urls[i])
                 
-                img_arrs = [utils.image_to_array(imgs[i]) for i in non_pl_indices]
-                non_pl_urls = [urls[i] for i in non_pl_indices]
+                prediction = self.siam_service.predict(valid_urls2, img_arrs, url_identifiers)
                 
-                prediction = json.loads(self.siam_service.predict(non_pl_urls, img_arrs))
-                
-                dl_output = []
-                
-                if prediction['status'] != 'failure':
-                    dl_output = prediction['output']
-                
-                return json.dumps({'output':pl_output + dl_output, 'status':'completed'})
+                if prediction == 0:
+                    return json.dumps({'status':'failure', 'message':'Some error occurred'})
+            
+            return [url_identifiers[url] for url in urls]
             
         except Exception as err:
             return json.dumps({'status':'failure', 'message':err.message})
