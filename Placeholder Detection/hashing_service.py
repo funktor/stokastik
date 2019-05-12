@@ -1,4 +1,4 @@
-import imagehash, os, glob, itertools, numpy as np
+import imagehash, os, glob, itertools, numpy as np, time
 from keras.preprocessing.image import img_to_array, load_img
 from sklearn.metrics import classification_report
 import constants as cnt
@@ -57,29 +57,25 @@ class HashingService(object):
         if len(self.hash_list) == 0:
             self.hash_list = utils.load_data_npy(cnt.HASH_LIST_PATH)
         
-    def predict(self, urls, imgs=None):
+    def predict(self, urls, imgs, url_identifiers):
         try:
             self.load()
 
-            if imgs is None:
-                imgs = [utils.image_url_to_obj(url) for url in urls]
-
-            output = []
-
-            for i in range(len(urls)):
+            for i in range(len(imgs)):
                 img = imgs[i]
-
-                if isinstance(img, int):
-                    output.append({'index':i, 'url':urls[i], 'status':'failure', 'message':'Image could not be retrieved', 'label':-1, 'confidence':-1})
-
+                
+                start = time.time()
                 prediction, confidence = is_placeholder(img, self.hash_list)
+                duration = time.time()-start
+                
+                url_identifiers[urls[i]]['processingTimeInSecs'] += duration
 
                 if prediction == 1:
-                    output.append({'index':i, 'url':urls[i], 'status':'success', 'tag':'placeholder', 'label':1, 'confidence':confidence})
-                else:
-                    output.append({'index':i, 'url':urls[i], 'status':'success', 'tag':'non_placeholder', 'label':0, 'confidence':1-confidence})
+                    url_identifiers[urls[i]]['classifierType'] = 'PLACEHOLDER_HASH'
+                    url_identifiers[urls[i]]['classification_tag'] = 'PLACEHOLDER_HASH'
+                    url_identifiers[urls[i]]['tags'] = {'imageTag': "placeholder", 'score': confidence}
 
-            return json.dumps({'output':output, 'status':'completed'})
+            return 1
         
         except Exception as err:
-            return json.dumps({'status':'failure', 'message':err.message})
+            return 0

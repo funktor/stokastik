@@ -6,6 +6,7 @@ from PIL import Image
 from multiprocessing.dummy import Pool as ThreadPool
 import constants as cnt
 import utilities as utils
+from sklearn.preprocessing import LabelBinarizer
 
 def generate_synthetic_single_thread(img_path, image_save_dir, num_generate_per_instance, datagen):
     img_path_hash = hashlib.md5(img_path.encode('utf-8')).hexdigest()
@@ -49,21 +50,27 @@ def get_image_data_siamese(num_samples, prefix='train'):
     random.seed(42)
     
     batch_size = cnt.SIAMESE_BATCH_SIZE
-    train_image_data, train_pt_url_map = utils.get_sampled_train_data()
+    
+    train_image_data = utils.load_data_npy(cnt.TRAIN_IMAGE_DATA_FILE)
+    train_pt_url_map = utils.load_data_pkl(cnt.TRAIN_PT_URL_MAP_FILE)
     
     negative_samples_pts = dict()
     for pt, urls in train_pt_url_map.items():
         w = len(urls)
         negative_samples_pts[pt] = list(set(range(train_image_data.shape[0])).difference(set(urls)))
     
-    image_data = utils.load_data_npy(prefix + "_image_data.npy")
+    if prefix == 'train':
+        image_data = train_image_data
+        pt_url_map = train_pt_url_map
+    else:
+        image_data = utils.load_data_npy(prefix + "_image_data.npy")
+        pt_url_map = utils.load_data_pkl(prefix + "_pt_url_map.pkl")
+        
     p = np.random.permutation(image_data.shape[0])
     
-    pt_url_map = utils.load_data_pkl(prefix + "_pt_url_map.pkl")
     url_pt_map = utils.load_data_pkl(prefix + "_url_pt_map.pkl")
     
-    test_placeholder_data = utils.load_data_npy(cnt.TEST_PLACEHOLDERS_FILE)
-    train_placeholder_data = utils.load_data_npy(cnt.TRAIN_PLACEHOLDERS_FILE)
+    placeholder_data = utils.load_data_npy(cnt.TEST_PLACEHOLDERS_FILE)
     
     random.seed(None)
     
@@ -93,14 +100,9 @@ def get_image_data_siamese(num_samples, prefix='train'):
         b2_samples = [random.sample(negative_samples_pts[pt], 1)[0] for pt in a2_pts]
         b2 = train_image_data[b2_samples]
         
-#         if prefix == 'train':
-#             b3_samples = np.random.choice(range(train_placeholder_data.shape[0]), d, replace=True)
-#             b3 = train_placeholder_data[b3_samples]
-            
-#         else:
-        b3_samples = np.random.choice(range(test_placeholder_data.shape[0]), d, replace=True)
-        b3 = test_placeholder_data[b3_samples]
-        
+        b3_samples = np.random.choice(range(placeholder_data.shape[0]), d, replace=True)
+        b3 = placeholder_data[b3_samples]
+
         b2 = np.vstack((b2, b3))
         b2 = b2[np.random.randint(b2.shape[0], size=d), :]
         
@@ -115,3 +117,33 @@ def get_image_data_siamese(num_samples, prefix='train'):
         batch_num += 1
         
         yield [image_data_1, image_data_2], labels
+        
+        
+def get_image_data_classifier(num_samples):
+    random.seed(42)
+    
+    batch_size = cnt.CLASSIFIER_BATCH_SIZE
+    
+    train_image_data = utils.load_data_npy(cnt.TRAIN_IMAGE_DATA_FILE)
+    train_url_pt_map = utils.load_data_pkl(cnt.TRAIN_URL_PT_MAP_FILE)
+    
+    labels = [train_url_pt_map[i] for i in range(train_image_data.shape[0])]
+    
+    encoder = LabelBinarizer()
+    transfomed_labels = np.array(encoder.fit_transform(labels))
+        
+    p = np.random.permutation(train_image_data.shape[0])
+    
+    n = train_image_data.shape[0]
+    num_batches = int(math.ceil(float(n)/batch_size))
+    
+    batch_num = 0
+    
+    while True:
+        m = batch_num % num_batches
+        start, end = m*batch_size, min((m+1)*batch_size, n)
+        
+        samples = p[start:end]
+        batch_num += 1
+        
+        yield train_image_data[samples], transfomed_labels[samples]
