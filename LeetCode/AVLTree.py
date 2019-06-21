@@ -47,6 +47,7 @@ class AVLTree(object):
                     node = TreeNode(root.val, root.left.right, root.right)
                     node.height = self.get_height(node)
                     root.left.right = node
+                    root.left.height = self.get_height(root.left)
                     return root.left
                 
                 elif d - c == 1:
@@ -58,6 +59,7 @@ class AVLTree(object):
                     node = TreeNode(root.val, root.left.right, root.right)
                     node.height = self.get_height(node)
                     root.left.right = node
+                    root.left.height = self.get_height(root.left)
                     return root.left
                 
             elif b - a == 2:
@@ -65,6 +67,7 @@ class AVLTree(object):
                     node = TreeNode(root.val, root.left, root.right.left)
                     node.height = self.get_height(node)
                     root.right.left = node
+                    root.right.height = self.get_height(root.right)
                     return root.right
                 
                 elif f - e == -1:
@@ -76,6 +79,7 @@ class AVLTree(object):
                     node = TreeNode(root.val, root.left, root.right.left)
                     node.height = self.get_height(node)
                     root.right.left = node
+                    root.right.height = self.get_height(root.right)
                     return root.right
                 
         return root
