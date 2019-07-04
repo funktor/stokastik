@@ -1,44 +1,38 @@
 class Solution(object):
+    def fn2(self, heightMap, x, y, heap, visited, out_set, base):
+        if (x, y) not in visited:
+            heapq.heappush(heap, (heightMap[x][y], x, y))
+            visited.add((x, y))
+            
+            if heightMap[x][y] <= base:
+                out_set.add((x, y))
+    
     def bfs(self, heightMap, i, j, m, n):
         base = heightMap[i][j]
-        queue = collections.deque([(i, j)])
-        visited = set([(i, j)])
+        heap = [(heightMap[i][j], i, j)]
+        visited, out_set = set([(i, j)]), set([(i, j)])
         
         min_value = float("Inf")
         
-        while len(queue) > 0:
-            x, y = queue.popleft()
-            x0 = heightMap[x][y]
+        while len(heap) > 0:
+            h, x, y = heapq.heappop(heap)
             
             if x == 0 or y == 0 or x == m-1 or y == n-1:
-                if heightMap[x][y] > base:
-                    visited.remove((x, y))
-                    min_value = min(min_value, heightMap[x][y])
+                if h > base:
+                    return out_set, h
                 else:
                     return set(), float("Inf")
             
-            elif heightMap[x][y] > base:
-                visited.remove((x, y))
-                min_value = min(min_value, heightMap[x][y])
+            elif h > base:
+                return out_set, h
             
             else:
-                if (x+1, y) not in visited:
-                    queue.append((x+1, y))
-                    visited.add((x+1, y))
+                self.fn2(heightMap, x+1, y, heap, visited, out_set, base)
+                self.fn2(heightMap, x-1, y, heap, visited, out_set, base)
+                self.fn2(heightMap, x, y+1, heap, visited, out_set, base)
+                self.fn2(heightMap, x, y-1, heap, visited, out_set, base)
                     
-                if (x-1, y) not in visited:
-                    queue.append((x-1, y))
-                    visited.add((x-1, y))
-                    
-                if (x, y+1) not in visited:
-                    queue.append((x, y+1))
-                    visited.add((x, y+1))
-                    
-                if (x, y-1) not in visited:
-                    queue.append((x, y-1))
-                    visited.add((x, y-1))
-                    
-        return visited, min_value
+        return out_set, min_value
     
     def fn(self, heightMap, x, y, heap, visited, out_set, h, excluded, m, n):
         p = 0 < x < m-1 and 0 < y < n-1
@@ -101,7 +95,6 @@ class Solution(object):
             
             if (i, j) not in visited:
                 a, b = self.bfs(heightMap, i, j, m, n)
-                # print i, j, len(a)
                 
                 if b != float("Inf"):
                     visited.update(a)
@@ -109,5 +102,3 @@ class Solution(object):
                         total_sum += b-heightMap[p][q]
         
         return total_sum
-    
-    
