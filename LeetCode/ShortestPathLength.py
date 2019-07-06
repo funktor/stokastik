@@ -22,12 +22,12 @@ class Solution(object):
             else:
                 for i in graph[node]:
                     q = path + [i]
-                    if len(q) < min_path:
+                    if len(q) <= min_path:
                         s = (path[-1], i)
                         p = set(q)
 
                         if (s, tuple(p)) not in cache or len(q) < cache[(s, tuple(p))]:
-                            heapq.heappush(heap, (-len(p)-len(graph[i])+len(q), i, q))
+                            heapq.heappush(heap, (-len(p), i, q))
                             cache[(s, tuple(p))] = len(q)
                         
         return min_path
