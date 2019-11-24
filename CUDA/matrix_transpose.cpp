@@ -55,6 +55,9 @@ int main(void) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count();
 
     std::cout << duration << std::endl;
+    
+    free(idata);
+    free(odata);
 
     return 0;
 }
