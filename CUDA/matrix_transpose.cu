@@ -101,6 +101,9 @@ int main(void) {
 
     std::cout << duration << std::endl;
     std::cout << check_correctness(odata, idata, n, m) << std::endl;
+    
+    cudaFree(idata);
+    cudaFree(odata);
 
     return 0;
 }
