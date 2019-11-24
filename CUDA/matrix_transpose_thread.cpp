@@ -80,6 +80,9 @@ int main(void) {
 
     std::cout << duration << std::endl;
     std::cout << check_correctness(odata, idata, n, m) << std::endl;
+    
+    free(idata);
+    free(odata);
 
     return 0;
 }
