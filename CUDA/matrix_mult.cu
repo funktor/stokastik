@@ -131,6 +131,10 @@ int main(void) {
     std::cout << duration << std::endl;
     std::cout << check_correctness(mat_1, mat_2, mat_prod, n, p) << std::endl;
     
+    cudaFree(mat_1);
+    cudaFree(mat_2);
+    cudaFree(mat_prod);
+    
     return 0;
 }
 
