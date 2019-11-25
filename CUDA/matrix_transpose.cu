@@ -22,14 +22,14 @@ __global__ void transposeNaive(int *odata, const int *idata, const int n, const 
 }
 
 __global__ void transposeSharedMem(int *odata, const int *idata, const int n, const int m) {
-    __shared__ int tile[TILE_DIM][TILE_DIM+1];
+    __shared__ int tile[TILE_DIM * (TILE_DIM+1)];
 
     int x = blockIdx.x * TILE_DIM + threadIdx.x;
     int y = blockIdx.y * TILE_DIM + threadIdx.y;
 
 
     for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
-        tile[threadIdx.y+j][threadIdx.x] = idata[(y+j)*m + x];
+        tile[(threadIdx.y+j)*(TILE_DIM+1) + threadIdx.x] = idata[(y+j)*m + x];
     }
 
     __syncthreads();
@@ -39,7 +39,7 @@ __global__ void transposeSharedMem(int *odata, const int *idata, const int n, co
 
     for (int j = 0; j < TILE_DIM; j+= BLOCK_ROWS) {
         if (x < n && (y+j) < m) {
-            odata[(y+j)*n + x] = tile[threadIdx.x][threadIdx.y+j];
+            odata[(y+j)*n + x] = tile[threadIdx.x*(TILE_DIM+1) + threadIdx.y+j];
         }
     }
 }
