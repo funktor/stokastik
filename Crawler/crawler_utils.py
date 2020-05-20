@@ -1,13 +1,17 @@
 import requests, re, urllib
 import numpy as np
 import time, random
-import threading
+import threading, multiprocessing
 from fake_useragent import UserAgent
 
 
 class ReadWriteLock:
-    def __init__(self):
-        self._read_ready = threading.Condition(threading.Lock())
+    def __init__(self, is_threaded=True):
+        if is_threaded:
+            self._read_ready = threading.Condition(threading.Lock())
+        else:
+            self._read_ready = multiprocessing.Condition(multiprocessing.Lock())
+
         self._readers = 0
 
     def acquire_read(self):
@@ -22,7 +26,7 @@ class ReadWriteLock:
         try:
             self._readers -= 1
             if not self._readers:
-                self._read_ready.notifyAll()
+                self._read_ready.notify_all()
         finally:
             self._read_ready.release()
 
@@ -36,10 +40,11 @@ class ReadWriteLock:
 
 
 class Throttle(object):
-    def __init__(self, delay):
-        self.lock = ReadWriteLock()
+    def __init__(self, delay, is_threaded=True):
+        self.lock = ReadWriteLock(is_threaded)
         self.delay = delay
         self.last_accessed_time_domain = {}
+        self.event = threading.Event()
 
     def wait(self, url):
         self.lock.acquire_read()
@@ -50,7 +55,7 @@ class Throttle(object):
         if self.delay > 0 and last_accessed is not None:
             sleep_secs = self.delay - (time.time() - last_accessed)
             if sleep_secs > 0:
-                time.sleep(sleep_secs)
+                self.event.wait(sleep_secs)
 
         self.lock.release_read()
 
@@ -65,14 +70,14 @@ class Sample(object):
         self.weights = weights
 
         s = sum(self.weights)
-        self.weights = [x/float(s) if s != 0 else 0.0 for x in self.weights]
+        self.weights = [x / float(s) if s != 0 else 0.0 for x in self.weights]
 
-        self.cum_sum = [0]*len(self.values)
+        self.cum_sum = [0] * len(self.values)
         self.compute_cum_sum()
         self.with_replacement = with_replacement
 
     def compute_cum_sum(self):
-        cum_sum = [0]*len(self.values)
+        cum_sum = [0] * len(self.values)
         s = 0
         for i in range(len(self.values)):
             s += self.weights[i]
@@ -106,9 +111,9 @@ class Sample(object):
 
 
 class SharedSet(object):
-    def __init__(self):
+    def __init__(self, is_threaded=True):
         self.shared_set = set()
-        self.lock = ReadWriteLock()
+        self.lock = ReadWriteLock(is_threaded)
 
     def get(self, item):
         self.lock.acquire_read()

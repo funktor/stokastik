@@ -127,7 +127,7 @@ def get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num=5):
     return urls
 
 if __name__ == "__main__":
-    max_threads = 50
+    max_threads = 5
     max_page_num = 50
 
     titles, ratings, prices, detail_urls, authors, query_strs = [], [], [], [], [], []
@@ -211,4 +211,4 @@ if __name__ == "__main__":
                        'Authors': authors,
                        'Product Details Page': detail_urls})
 
-    df.to_csv('amazon_products_5.csv', index=False, encoding='utf-8')
+    df.to_csv('amazon_products_6.csv', index=False, encoding='utf-8')
