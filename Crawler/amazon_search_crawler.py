@@ -28,85 +28,87 @@ def get_data_search(q_urls, queue, throttle, proxies_list_sample_obj, ua):
             throttle.wait(q_url)
 
             r = requests.get(q_url, headers=headers, proxies=proxies)
-            soup = BeautifulSoup(r.content, "lxml")
 
-            for d in soup.findAll('div', attrs={'class': 'sg-col-4-of-12 sg-col-8-of-16 sg-col-16-of-24 sg-col-12-of-20 sg-col-24-of-32 sg-col sg-col-28-of-36 sg-col-20-of-28'}):
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.content, "lxml")
 
-                p_title = d.find('span', attrs={'class': 'a-size-medium a-color-base a-text-normal'})
-                p_price = d.find('span', attrs={'class': 'a-offscreen'})
-                p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
-                p_author = d.find('a', attrs={'class': 'a-size-base a-link-normal'})
-                p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
+                for d in soup.findAll('div', attrs={'class': 'sg-col-4-of-12 sg-col-8-of-16 sg-col-16-of-24 sg-col-12-of-20 sg-col-24-of-32 sg-col sg-col-28-of-36 sg-col-20-of-28'}):
 
-                all = []
+                    p_title = d.find('span', attrs={'class': 'a-size-medium a-color-base a-text-normal'})
+                    p_price = d.find('span', attrs={'class': 'a-offscreen'})
+                    p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
+                    p_author = d.find('a', attrs={'class': 'a-size-base a-link-normal'})
+                    p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
 
-                if p_title is not None:
-                    all.append(p_title.text)
-                else:
-                    all.append("NA")
+                    all = []
 
-                if p_price is not None:
-                    all.append(p_price.text)
-                else:
-                    all.append('NA')
+                    if p_title is not None:
+                        all.append(p_title.text)
+                    else:
+                        all.append("NA")
 
-                if p_rating is not None:
-                    all.append(p_rating.text)
-                else:
-                    all.append('NA')
+                    if p_price is not None:
+                        all.append(p_price.text)
+                    else:
+                        all.append('NA')
 
-                if p_author is not None:
-                    all.append(p_author.text)
-                else:
-                    all.append('NA')
+                    if p_rating is not None:
+                        all.append(p_rating.text)
+                    else:
+                        all.append('NA')
 
-                if p_product_url is not None:
-                    all.append(p_product_url['href'])
-                else:
-                    all.append('NA')
+                    if p_author is not None:
+                        all.append(p_author.text)
+                    else:
+                        all.append('NA')
 
-                all.append(query)
+                    if p_product_url is not None:
+                        all.append(p_product_url['href'])
+                    else:
+                        all.append('NA')
 
-                queue.put(all)
+                    all.append(query)
 
-            for d in soup.findAll('div', attrs={'class': 'sg-col-4-of-24 sg-col-4-of-12 sg-col-4-of-36 s-result-item s-asin sg-col-4-of-28 sg-col-4-of-16 sg-col sg-col-4-of-20 sg-col-4-of-32'}):
+                    queue.put(all)
 
-                p_title = d.find('span', attrs={'class': 'a-size-base-plus a-color-base a-text-normal'})
-                p_price = d.find('span', attrs={'class': 'a-offscreen'})
-                p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
-                p_author = d.find('a', attrs={'class': 'a-size-base a-link-normal'})
-                p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
+                for d in soup.findAll('div', attrs={'class': 'sg-col-4-of-24 sg-col-4-of-12 sg-col-4-of-36 s-result-item s-asin sg-col-4-of-28 sg-col-4-of-16 sg-col sg-col-4-of-20 sg-col-4-of-32'}):
 
-                all = []
+                    p_title = d.find('span', attrs={'class': 'a-size-base-plus a-color-base a-text-normal'})
+                    p_price = d.find('span', attrs={'class': 'a-offscreen'})
+                    p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
+                    p_author = d.find('a', attrs={'class': 'a-size-base a-link-normal'})
+                    p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
 
-                if p_title is not None:
-                    all.append(p_title.text)
-                else:
-                    all.append("NA")
+                    all = []
 
-                if p_price is not None:
-                    all.append(p_price.text)
-                else:
-                    all.append('NA')
+                    if p_title is not None:
+                        all.append(p_title.text)
+                    else:
+                        all.append("NA")
 
-                if p_rating is not None:
-                    all.append(p_rating.text)
-                else:
-                    all.append('NA')
+                    if p_price is not None:
+                        all.append(p_price.text)
+                    else:
+                        all.append('NA')
 
-                if p_author is not None:
-                    all.append(p_author.text)
-                else:
-                    all.append('NA')
+                    if p_rating is not None:
+                        all.append(p_rating.text)
+                    else:
+                        all.append('NA')
 
-                if p_product_url is not None:
-                    all.append(p_product_url['href'])
-                else:
-                    all.append('NA')
+                    if p_author is not None:
+                        all.append(p_author.text)
+                    else:
+                        all.append('NA')
 
-                all.append(query)
+                    if p_product_url is not None:
+                        all.append(p_product_url['href'])
+                    else:
+                        all.append('NA')
 
-                queue.put(all)
+                    all.append(query)
+
+                    queue.put(all)
 
         except Exception as e:
             logger.error(e)
@@ -127,7 +129,7 @@ def get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num=5):
     return urls
 
 if __name__ == "__main__":
-    max_threads = 5
+    max_threads = 50
     max_page_num = 50
 
     titles, ratings, prices, detail_urls, authors, query_strs = [], [], [], [], [], []

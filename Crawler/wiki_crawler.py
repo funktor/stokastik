@@ -34,31 +34,32 @@ def add_to_url_queue(q_urls, queue, out_queue, throttle, proxies_list_sample_obj
 
             r = requests.get(q_url, headers=headers, proxies=proxies)
 
-            out_queue.put([q_url, url_hash, 'NA', parent_url_hash])
+            if r.status_code == 200:
+                out_queue.put([q_url, url_hash, 'NA', parent_url_hash])
 
-            if level+1 <= max_level:
-                soup = BeautifulSoup(r.content, "lxml")
+                if level+1 <= max_level:
+                    soup = BeautifulSoup(r.content, "lxml")
 
-                crawled_urls = []
+                    crawled_urls = []
 
-                for d in soup.findAll('a', href=True):
-                    if re.match('^\/wiki\/[^\/\:\.]+$', d['href']):
-                        url = 'https://en.wikipedia.org' + d['href']
-                        crawled_urls.append(url)
+                    for d in soup.findAll('a', href=True):
+                        if re.match('^\/wiki\/[^\/\:\.]+$', d['href']):
+                            url = 'https://en.wikipedia.org' + d['href']
+                            crawled_urls.append(url)
 
-                if len(crawled_urls) <= max_urls_per_page:
-                    crawled_samples = crawled_urls
-                else:
-                    crawled_weights = [1.0] * max_urls_per_page + [0.1] * (len(crawled_urls) - max_urls_per_page)
-                    sample = utils.Sample(crawled_urls, crawled_weights, False)
-                    crawled_samples = sample.get(max_urls_per_page)
+                    if len(crawled_urls) <= max_urls_per_page:
+                        crawled_samples = crawled_urls
+                    else:
+                        crawled_weights = [1.0] * max_urls_per_page + [0.1] * (len(crawled_urls) - max_urls_per_page)
+                        sample = utils.Sample(crawled_urls, crawled_weights, False)
+                        crawled_samples = sample.get(max_urls_per_page)
 
-                for url in crawled_samples:
-                    p = hash(url)
+                    for url in crawled_samples:
+                        p = hash(url)
 
-                    if shared_url_set.get(p) is False:
-                        queue.put([url, level + 1, url_hash])
-                        shared_url_set.add(p)
+                        if shared_url_set.get(p) is False:
+                            queue.put([url, level + 1, url_hash])
+                            shared_url_set.add(p)
 
         except Exception as e:
             logger.error(e)

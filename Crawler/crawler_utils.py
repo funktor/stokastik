@@ -140,3 +140,24 @@ def get_free_proxy_list():
     r = requests.get('https://free-proxy-list.net', headers=headers)
 
     return re.findall('[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\:[0-9]+', r.text)
+
+
+def clean_tokens(tokens, to_replace='[^a-zA-Z0-9\'\.\" ]+'):
+    tokens = [re.sub(to_replace, ' ', token) for token in tokens]
+    return tokens
+
+
+def tokenize(mystr):
+    return mystr.lower().split(" ")
+
+
+def sanitize(sentence, to_replace='[^a-zA-Z0-9-\'\.\" ]+'):
+    sentence = re.sub('<[^<]+?>', ' ', sentence)
+    sentence = re.sub(to_replace, ' ', sentence).strip()
+    sentence = re.sub('(?<![0-9])\.(?![0-9])|(?<=[0-9])\.(?![0-9])|(?<![0-9])\.(?=[0-9])', ' ', sentence).strip()
+    sentence = re.sub('\s+', ' ', sentence)
+
+    tokens = clean_tokens(tokenize(sentence), to_replace)
+    tokens = [re.sub('\s+', ' ', token) for token in tokens]
+
+    return ' '.join([x.strip() for x in tokens])
