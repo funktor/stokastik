@@ -14,8 +14,8 @@ logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(ascti
 logger = logging.getLogger(__name__)
 
 
-def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj, ua, max_level=5,
-                     max_urls_per_page=10):
+def add_to_url_queue(q_urls, rdis, bloom, out_queue, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
+                     max_urls_per_page=10, use_bloom=True):
 
     for q_url, level, parent_url_hash in q_urls:
         try:
@@ -56,28 +56,40 @@ def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj,
                         crawled_samples = sample.get(max_urls_per_page)
 
 
-                    for url in crawled_samples:
-                        p = hash(url)
-                        with rdis.pipeline() as pipe:
-                            try:
-                                pipe.watch(p)
-
-                                if rdis.exists(p) == 0:
-                                    pipe.multi()
-                                    rdis.rpush('task_queue', json.dumps({'url': url, 'level': level+1,
+                    if use_bloom:
+                        for url in crawled_samples:
+                            lock.acquire_write()
+                            with rdis.pipeline() as pipe:
+                                if bloom.is_present(url) is False:
+                                    rdis.rpush('task_queue', json.dumps({'url': url, 'level': level + 1,
                                                                          'parent_url_hash': url_hash}))
-                                    rdis.set(p, 1)
-                                    pipe.execute()
+                                    bloom.insert_key(url)
+                                pipe.execute()
+                            lock.release_write()
 
-                            except redis.WatchError as e:
-                                logger.warning(e)
+                    else:
+                        for url in crawled_samples:
+                            p = hash(url)
+                            with rdis.pipeline() as pipe:
+                                try:
+                                    pipe.watch(p)
+
+                                    if rdis.exists(p) == 0:
+                                        pipe.multi()
+                                        rdis.rpush('task_queue', json.dumps({'url': url, 'level': level+1,
+                                                                             'parent_url_hash': url_hash}))
+                                        rdis.set(p, 1)
+                                        pipe.execute()
+
+                                except redis.WatchError as e:
+                                    logger.warning(e)
 
         except Exception as e:
             logger.error(e)
 
 
-def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50,
-        max_urls_per_page=10):
+def bfs(rdis, bloom, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50,
+        max_urls_per_page=10, use_bloom=True):
 
     curr_level = 0
 
@@ -100,6 +112,7 @@ def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=5
             throttle = utils.Throttle(1.0)
 
             n_threads = min(max_threads, len(curr_queue_data))
+            lock = utils.ReadWriteLock()
 
             batch_size = int(math.ceil(len(curr_queue_data) / float(n_threads)))
             threads = [None] * n_threads
@@ -109,9 +122,9 @@ def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=5
                 start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
                 urls = [curr_queue_data[j] for j in range(start, end)]
 
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, out_queue, throttle,
-                                                                             proxies_list_sample_obj, ua,
-                                                                             max_level, max_urls_per_page))
+                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, bloom, out_queue, throttle,
+                                                                             proxies_list_sample_obj, ua, lock,
+                                                                             max_level, max_urls_per_page, use_bloom))
                 threads[i].start()
 
             print()
@@ -149,7 +162,11 @@ if __name__ == "__main__":
     r.rpush('task_queue', json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
     r.set(hash(seed_url), 1)
 
-    bfs(r, out_queue, proxies_list_sample_obj, ua, max_level=3, max_threads=100, max_urls_per_page=10)
+    bloom = utils.BloomFilter(r, m=10000121, k=5)
+    bloom.insert_key(seed_url)
+
+    bfs(r, bloom, out_queue, proxies_list_sample_obj, ua, max_level=3, max_threads=100, max_urls_per_page=10,
+        use_bloom=True)
 
     r.flushall()
     r.close()

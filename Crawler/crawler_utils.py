@@ -4,6 +4,7 @@ import time, random
 import threading, multiprocessing
 from fake_useragent import UserAgent
 import urllib.parse
+import redis
 
 class ReadWriteLock:
     def __init__(self, is_threaded=True):
@@ -161,3 +162,71 @@ def sanitize(sentence, to_replace='[^a-zA-Z0-9-\'\.\" ]+'):
     tokens = [re.sub('\s+', ' ', token) for token in tokens]
 
     return ' '.join([x.strip() for x in tokens])
+
+
+def sieve(a, b, n):
+    arr = list(range(2, b + 1))
+    out = []
+
+    while True:
+        new_arr, h = [], arr[0]
+        out.append(h)
+
+        for x in arr[1:]:
+            if x % h != 0:
+                new_arr.append(x)
+
+        if len(new_arr) == 0:
+            break
+
+        arr = new_arr[:]
+
+    out = [x for x in out if x >= a]
+
+    if len(out) <= n:
+        return out
+
+    return random.sample(out, n)
+
+
+class BloomFilter(object):
+    def __init__(self, rdis, m=17117, k=30, name='bloom'):
+        self.rdis = rdis
+        self.m = m
+        self.k = k
+        self.name = name
+        self.a1, self.b1, self.a2, self.b2 = 79, 23, 73, 61
+
+    def get_index_positions(self, key):
+        x = hash(key)
+        positions = [-1]*self.k
+
+        for i in range(self.k):
+            h1 = (self.a1*x + self.b1) % self.m
+            h2 = (self.a2*x + self.b2) % self.m
+
+            positions[i] = (h1 + (i+1)*h2) % self.m
+
+        return positions
+
+    def insert_key(self, key):
+        with self.rdis.pipeline() as pipe:
+            positions = self.get_index_positions(key)
+            for pos in positions:
+                self.rdis.setbit(self.name, pos, 1)
+            pipe.execute()
+
+    def insert_keys(self, keys):
+        with self.rdis.pipeline() as pipe:
+            for key in keys:
+                positions = self.get_index_positions(key)
+                for pos in positions:
+                    self.rdis.setbit(self.name, pos, 1)
+            pipe.execute()
+
+    def is_present(self, key):
+        with self.rdis.pipeline() as pipe:
+            positions = self.get_index_positions(key)
+            out = [self.rdis.getbit(self.name, pos) for pos in positions]
+            pipe.execute()
+        return all(out)
