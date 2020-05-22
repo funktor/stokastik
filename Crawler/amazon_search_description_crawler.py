@@ -8,6 +8,7 @@ import logging, json
 from fake_useragent import UserAgent
 import crawler_utils as utils
 import urllib.parse
+import redis
 
 
 logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
@@ -145,7 +146,7 @@ def insert_metadata(soup, query, q_url, url_hash, level, out_queue):
     return next_level_urls
 
 
-def add_to_url_queue(q_urls, queue, out_queue, throttle, proxies_list_sample_obj, ua, max_level=5):
+def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj, ua, max_level=5):
 
     for query, q_url, level in q_urls:
         try:
@@ -171,22 +172,27 @@ def add_to_url_queue(q_urls, queue, out_queue, throttle, proxies_list_sample_obj
                 next_level_urls = insert_metadata(soup, query, q_url, url_hash, level, out_queue)
 
                 if len(next_level_urls) > 0 and level+1 <= max_level:
-                    for url in next_level_urls:
-                        queue.put([query, url, level + 1])
+                    with rdis.pipeline() as pipe:
+                        for url in next_level_urls:
+                            rdis.rpush('task_queue', json.dumps({'query': query, 'url': url, 'level': level + 1}))
+                        pipe.execute()
 
         except Exception as e:
             logger.error(e)
 
 
-def bfs(queue, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50):
+def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50):
     curr_level = 0
 
     while curr_level <= max_level:
         try:
             curr_queue_data = []
 
-            while queue.empty() is not True:
-                curr_queue_data.append(queue.get())
+            with rdis.pipeline() as pipe:
+                while rdis.llen('task_queue') > 0:
+                    x = json.loads(rdis.lpop('task_queue'))
+                    curr_queue_data.append([x['query'], x['url'], x['level']])
+                pipe.execute()
 
             print("Current level = ", curr_level)
             print(len(curr_queue_data))
@@ -206,7 +212,7 @@ def bfs(queue, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=
                 start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
                 urls = [curr_queue_data[j] for j in range(start, end)]
 
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, queue, out_queue, throttle,
+                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, out_queue, throttle,
                                                                              proxies_list_sample_obj, ua, max_level))
                 threads[i].start()
 
@@ -286,13 +292,21 @@ if __name__ == "__main__":
 
     q_urls = get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num)
 
-    m1, m2 = Manager(), Manager()
-    urls_queue, out_queue = m1.Queue(), m2.Queue()
+    m = Manager()
+    out_queue = m.Queue()
 
-    for q_url in q_urls:
-        urls_queue.put(q_url)
+    r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0)
 
-    bfs(urls_queue, out_queue, proxies_list_sample_obj, ua, max_level=2, max_threads=max_threads)
+    with r.pipeline() as pipe:
+        for q_url in q_urls:
+            r.rpush('task_queue', json.dumps({'query': q_url[0],  'url': q_url[1], 'level': q_url[2]}))
+
+        pipe.execute()
+
+    bfs(r, out_queue, proxies_list_sample_obj, ua, max_level=2, max_threads=max_threads)
+
+    r.flushall()
+    r.close()
 
     while out_queue.empty() is not True:
         queue_top = out_queue.get()
@@ -306,4 +320,4 @@ if __name__ == "__main__":
     df = pd.DataFrame({'Queries': search_queries, 'URLs': urls, 'URL Hashes': url_hashes, 'Metadata': metadata,
                        'Timestamp': timestamp})
 
-    df.to_csv('amazon_title_desc.csv', index=False, encoding='utf-8')
+    df.to_csv('amazon_title_desc_2.csv', index=False, encoding='utf-8')

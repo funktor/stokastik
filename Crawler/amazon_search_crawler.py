@@ -7,6 +7,7 @@ import threading
 import logging
 from fake_useragent import UserAgent
 import crawler_utils as utils
+import urllib.parse
 
 logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def get_data_search(q_urls, queue, throttle, proxies_list_sample_obj, ua):
                     all = []
 
                     if p_title is not None:
-                        all.append(p_title.text)
+                        all.append(utils.sanitize(p_title.text))
                     else:
                         all.append("NA")
 
@@ -82,7 +83,7 @@ def get_data_search(q_urls, queue, throttle, proxies_list_sample_obj, ua):
                     all = []
 
                     if p_title is not None:
-                        all.append(p_title.text)
+                        all.append(utils.sanitize(p_title.text))
                     else:
                         all.append("NA")
 

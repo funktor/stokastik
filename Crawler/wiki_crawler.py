@@ -3,17 +3,18 @@ from bs4 import BeautifulSoup
 import pandas as pd, numpy as np
 import time, math, random
 from multiprocessing import Process, Queue, Pool, Manager
-import threading
+import threading, json
 import sys
 import logging
 from fake_useragent import UserAgent
 import crawler_utils as utils
+import redis
 
 logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def add_to_url_queue(q_urls, queue, out_queue, throttle, proxies_list_sample_obj, ua, shared_url_set, max_level=5,
+def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj, ua, max_level=5,
                      max_urls_per_page=10):
 
     for q_url, level, parent_url_hash in q_urls:
@@ -54,19 +55,28 @@ def add_to_url_queue(q_urls, queue, out_queue, throttle, proxies_list_sample_obj
                         sample = utils.Sample(crawled_urls, crawled_weights, False)
                         crawled_samples = sample.get(max_urls_per_page)
 
+
                     for url in crawled_samples:
                         p = hash(url)
+                        with rdis.pipeline() as pipe:
+                            try:
+                                pipe.watch(p)
 
-                        if shared_url_set.get(p) is False:
-                            queue.put([url, level + 1, url_hash])
-                            shared_url_set.add(p)
+                                if rdis.exists(p) == 0:
+                                    pipe.multi()
+                                    rdis.rpush('task_queue', json.dumps({'url': url, 'level': level+1,
+                                                                         'parent_url_hash': url_hash}))
+                                    rdis.set(p, 1)
+                                    pipe.execute()
+
+                            except redis.WatchError as e:
+                                logger.warning(e)
 
         except Exception as e:
             logger.error(e)
-            time.sleep(5.0)
 
 
-def bfs(queue, out_queue, proxies_list_sample_obj, ua, shared_url_set, max_level=5, max_threads=50,
+def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50,
         max_urls_per_page=10):
 
     curr_level = 0
@@ -75,8 +85,11 @@ def bfs(queue, out_queue, proxies_list_sample_obj, ua, shared_url_set, max_level
         try:
             curr_queue_data = []
 
-            while queue.empty() is not True:
-                curr_queue_data.append(queue.get())
+            with rdis.pipeline() as pipe:
+                while rdis.llen('task_queue') > 0:
+                    x = json.loads(rdis.lpop('task_queue'))
+                    curr_queue_data.append([x['url'], int(x['level']), x['parent_url_hash']])
+                pipe.execute()
 
             print("Current level = ", curr_level)
             print(len(curr_queue_data))
@@ -96,10 +109,9 @@ def bfs(queue, out_queue, proxies_list_sample_obj, ua, shared_url_set, max_level
                 start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
                 urls = [curr_queue_data[j] for j in range(start, end)]
 
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, queue, out_queue, throttle,
+                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, out_queue, throttle,
                                                                              proxies_list_sample_obj, ua,
-                                                                             shared_url_set, max_level,
-                                                                             max_urls_per_page))
+                                                                             max_level, max_urls_per_page))
                 threads[i].start()
 
             print()
@@ -128,18 +140,19 @@ if __name__ == "__main__":
 
     proxies_list_sample_obj = utils.Sample(proxies_list, proxies_list_weights)
 
-    m1, m2 = Manager(), Manager()
-
-    urls_queue, out_queue = m1.Queue(), m2.Queue()
+    m = Manager()
+    out_queue = m.Queue()
 
     seed_url = 'https://en.wikipedia.org/wiki/Cache-oblivious_algorithm'
 
-    urls_queue.put([seed_url, hash(seed_url), None])
+    r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0)
+    r.rpush('task_queue', json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
+    r.set(hash(seed_url), 1)
 
-    shared_url_set = utils.SharedSet()
+    bfs(r, out_queue, proxies_list_sample_obj, ua, max_level=3, max_threads=100, max_urls_per_page=10)
 
-    bfs(urls_queue, out_queue, proxies_list_sample_obj, ua, shared_url_set, max_level=2, max_threads=50,
-        max_urls_per_page=20)
+    r.flushall()
+    r.close()
 
     while out_queue.empty() is not True:
         queue_top = out_queue.get()

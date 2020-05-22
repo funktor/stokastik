@@ -3,7 +3,7 @@ import numpy as np
 import time, random
 import threading, multiprocessing
 from fake_useragent import UserAgent
-
+import urllib.parse
 
 class ReadWriteLock:
     def __init__(self, is_threaded=True):
