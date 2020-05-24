@@ -9,8 +9,11 @@ import logging
 from fake_useragent import UserAgent
 import crawler_utils as utils
 import redis
-from cassandra.cluster import Cluster
 import datetime
+from cassandra.cluster import Cluster
+from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
+from cassandra.auth import PlainTextAuthProvider
+from cassandra import ConsistencyLevel
 
 logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -21,7 +24,7 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
 
     while True:
         try:
-            out = rdis.blpop('task_queue', 5.0)
+            out = rdis.blpop('task_queue', 5)
 
             if out is None:
                 break
@@ -122,19 +125,30 @@ if __name__ == "__main__":
 
     seed_url = 'https://en.wikipedia.org/wiki/Cache-oblivious_algorithm'
 
-    r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0)
+    r = redis.StrictRedis(host='redis-crawler-001.7icodg.0001.usw2.cache.amazonaws.com', port=6379, db=0)
     r.rpush('task_queue', json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
     r.set(hash(seed_url), 1)
 
     bloom = utils.BloomFilter(r, m=10000121, k=5)
     bloom.insert_key(seed_url)
 
-    cluster = Cluster()
+    ssl_context = SSLContext(PROTOCOL_TLSv1)
+    ssl_context.load_verify_locations('/home/ec2-user/AmazonRootCA1.pem')
+    ssl_context.verify_mode = CERT_REQUIRED
+    auth_provider = PlainTextAuthProvider(username='stokastik-at-147662620103',
+                                          password='su3WZln9x+zGFjCE0dXKMbt58BuaMjdaa953YoIxaLE=')
+
+    cluster = Cluster(['cassandra.us-west-2.amazonaws.com'], ssl_context=ssl_context, auth_provider=auth_provider,
+                      port=9142)
     session = cluster.connect('wiki_crawler')
+
+    # cluster = Cluster()
+    # session = cluster.connect('wiki_crawler')
 
     session.execute('CREATE TABLE IF NOT EXISTS crawler(url_hash text PRIMARY KEY, url text, url_text text, parent_url_hash text, inserted_time timestamp);')
 
     insert_stmt = session.prepare("INSERT INTO crawler(url, url_hash, url_text, parent_url_hash, inserted_time) VALUES (?, ?, ?, ?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
 
     max_threads, max_level, max_urls_per_page, use_bloom = 100, 3, 10, True
 
