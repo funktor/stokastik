@@ -9,12 +9,14 @@ import logging
 from fake_useragent import UserAgent
 import crawler_utils as utils
 import redis
+from cassandra.cluster import Cluster
+import datetime
 
 logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def add_to_url_queue(q_urls, rdis, bloom, out_queue, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
+def add_to_url_queue(q_urls, rdis, bloom, out_queue, session, insert_stmt, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
                      max_urls_per_page=10, use_bloom=True):
 
     for q_url, level, parent_url_hash in q_urls:
@@ -37,6 +39,10 @@ def add_to_url_queue(q_urls, rdis, bloom, out_queue, throttle, proxies_list_samp
 
             if r.status_code == 200:
                 out_queue.put([q_url, url_hash, 'NA', parent_url_hash])
+
+                session.execute_async(insert_stmt,
+                                      [q_url, str(url_hash), 'NA', str(parent_url_hash),
+                                       int(datetime.datetime.now().timestamp() * 1000)])
 
                 if level+1 <= max_level:
                     soup = BeautifulSoup(r.content, "lxml")
@@ -88,8 +94,8 @@ def add_to_url_queue(q_urls, rdis, bloom, out_queue, throttle, proxies_list_samp
             logger.error(e)
 
 
-def bfs(rdis, bloom, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50,
-        max_urls_per_page=10, use_bloom=True):
+def bfs(rdis, bloom, out_queue, session, insert_stmt, proxies_list_sample_obj, ua, max_level=5,
+        max_threads=50, max_urls_per_page=10, use_bloom=True):
 
     curr_level = 0
 
@@ -122,7 +128,8 @@ def bfs(rdis, bloom, out_queue, proxies_list_sample_obj, ua, max_level=5, max_th
                 start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
                 urls = [curr_queue_data[j] for j in range(start, end)]
 
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, bloom, out_queue, throttle,
+                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, bloom, out_queue, session,
+                                                                             insert_stmt, throttle,
                                                                              proxies_list_sample_obj, ua, lock,
                                                                              max_level, max_urls_per_page, use_bloom))
                 threads[i].start()
@@ -165,11 +172,19 @@ if __name__ == "__main__":
     bloom = utils.BloomFilter(r, m=10000121, k=5)
     bloom.insert_key(seed_url)
 
-    bfs(r, bloom, out_queue, proxies_list_sample_obj, ua, max_level=3, max_threads=100, max_urls_per_page=10,
-        use_bloom=True)
+    cluster = Cluster()
+    session = cluster.connect('wiki_crawler')
+
+    session.execute('CREATE TABLE IF NOT EXISTS crawler(url_hash text PRIMARY KEY, url text, url_text text, parent_url_hash text, inserted_time timestamp);')
+
+    insert_stmt = session.prepare("INSERT INTO crawler(url, url_hash, url_text, parent_url_hash, inserted_time) VALUES (?, ?, ?, ?, ?)")
+
+    bfs(r, bloom, out_queue, session, insert_stmt, proxies_list_sample_obj,
+        ua, max_level=3, max_threads=100, max_urls_per_page=10, use_bloom=True)
 
     r.flushall()
     r.close()
+    session.shutdown()
 
     while out_queue.empty() is not True:
         queue_top = out_queue.get()
