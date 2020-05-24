@@ -16,11 +16,21 @@ logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(ascti
 logger = logging.getLogger(__name__)
 
 
-def add_to_url_queue(q_urls, rdis, bloom, out_queue, session, insert_stmt, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
+def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
                      max_urls_per_page=10, use_bloom=True):
 
-    for q_url, level, parent_url_hash in q_urls:
+    while True:
         try:
+            out = rdis.blpop('task_queue', 5.0)
+
+            if out is None:
+                break
+
+            _, task = out
+
+            x = json.loads(task)
+            q_url, level, parent_url_hash = x['url'], int(x['level']), x['parent_url_hash']
+
             url_hash = hash(q_url)
 
             user_agent = ua.random
@@ -89,62 +99,9 @@ def add_to_url_queue(q_urls, rdis, bloom, out_queue, session, insert_stmt, throt
 
                                 except redis.WatchError as e:
                                     logger.warning(e)
-
         except Exception as e:
             logger.error(e)
 
-
-def bfs(rdis, bloom, out_queue, session, insert_stmt, proxies_list_sample_obj, ua, max_level=5,
-        max_threads=50, max_urls_per_page=10, use_bloom=True):
-
-    curr_level = 0
-
-    while curr_level <= max_level:
-        try:
-            curr_queue_data = []
-
-            with rdis.pipeline() as pipe:
-                while rdis.llen('task_queue') > 0:
-                    x = json.loads(rdis.lpop('task_queue'))
-                    curr_queue_data.append([x['url'], int(x['level']), x['parent_url_hash']])
-                pipe.execute()
-
-            print("Current level = ", curr_level)
-            print(len(curr_queue_data))
-
-            if len(curr_queue_data) == 0:
-                break
-
-            throttle = utils.Throttle(1.0)
-
-            n_threads = min(max_threads, len(curr_queue_data))
-            lock = utils.ReadWriteLock()
-
-            batch_size = int(math.ceil(len(curr_queue_data) / float(n_threads)))
-            threads = [None] * n_threads
-
-            for i in range(n_threads):
-                print("Starting thread = ", i)
-                start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
-                urls = [curr_queue_data[j] for j in range(start, end)]
-
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, bloom, out_queue, session,
-                                                                             insert_stmt, throttle,
-                                                                             proxies_list_sample_obj, ua, lock,
-                                                                             max_level, max_urls_per_page, use_bloom))
-                threads[i].start()
-
-            print()
-
-            for i in range(n_threads):
-                if threads[i]:
-                    threads[i].join()
-                    print("Completed thread = ", i)
-
-            curr_level += 1
-
-        except Exception as e:
-            logger.error(e)
 
 if __name__ == "__main__":
     urls, url_hashes, url_text, parent_url_hash = [], [], [], []
@@ -179,8 +136,28 @@ if __name__ == "__main__":
 
     insert_stmt = session.prepare("INSERT INTO crawler(url, url_hash, url_text, parent_url_hash, inserted_time) VALUES (?, ?, ?, ?, ?)")
 
-    bfs(r, bloom, out_queue, session, insert_stmt, proxies_list_sample_obj,
-        ua, max_level=3, max_threads=100, max_urls_per_page=10, use_bloom=True)
+    max_threads, max_level, max_urls_per_page, use_bloom = 100, 3, 10, True
+
+    throttle = utils.Throttle(1.0)
+
+    lock = utils.ReadWriteLock()
+
+    threads = [None] * max_threads
+
+    for i in range(max_threads):
+        print("Starting thread = ", i)
+        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, bloom, out_queue, session,
+                                                                     insert_stmt, throttle,
+                                                                     proxies_list_sample_obj, ua, lock,
+                                                                     max_level, max_urls_per_page, use_bloom))
+        threads[i].start()
+
+    print()
+
+    for i in range(max_threads):
+        if threads[i]:
+            threads[i].join()
+            print("Completed thread = ", i)
 
     r.flushall()
     r.close()
