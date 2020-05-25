@@ -245,12 +245,7 @@ if __name__ == "__main__":
 
     search_queries, urls, url_hashes, metadata, timestamp = [], [], [], [], []
 
-    domains = ['www.amazon.com',
-               'www.amazon.in',
-               'www.amazon.co.uk',
-               'www.amazon.fr',
-               'www.amazon.au',
-               'www.amazon.sg']
+    domains = ['www.amazon.com']
 
     domain_weights = [1.0, 0.50, 0.25, 0.20, 0.20, 0.20]
 

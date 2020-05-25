@@ -45,3 +45,8 @@ def git_pull():
 def run_crawler():
     with cd('/home/ec2-user/stokastik/Crawler/'):
         run('python3 wiki_crawler.py')
+
+@parallel
+def run_amzn_crawler():
+    with cd('/home/ec2-user/stokastik/Crawler/'):
+        run('python3 amazon_search_description_crawler.py')
