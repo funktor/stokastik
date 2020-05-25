@@ -14,8 +14,9 @@ from cassandra.cluster import Cluster
 from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
 from cassandra.auth import PlainTextAuthProvider
 from cassandra import ConsistencyLevel
+import constants as cnt
 
-logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.WIKI_LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +25,7 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
 
     while True:
         try:
-            out = rdis.blpop('task_queue', 5)
+            out = rdis.blpop('task_queue', cnt.REDIS_BLOCKING_TIMEOUT)
 
             if out is None:
                 break
@@ -80,7 +81,7 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
                             lock.acquire_write()
                             with rdis.pipeline() as pipe:
                                 if bloom.is_present(url) is False:
-                                    rdis.rpush('task_queue', json.dumps({'url': url, 'level': level + 1,
+                                    rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
                                                                          'parent_url_hash': url_hash}))
                                     bloom.insert_key(url)
                                 pipe.execute()
@@ -123,36 +124,34 @@ if __name__ == "__main__":
     m = Manager()
     out_queue = m.Queue()
 
-    seed_url = 'https://en.wikipedia.org/wiki/Cache-oblivious_algorithm'
+    r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
+    bloom = utils.BloomFilter(r, m=cnt.BLOOM_FILTER_SIZE, k=cnt.BLOOM_FILTER_NUM_HASHES)
 
-    r = redis.StrictRedis(host='redis-crawler-001.7icodg.0001.usw2.cache.amazonaws.com', port=6379, db=0)
-    r.rpush('task_queue', json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
-    r.set(hash(seed_url), 1)
-
-    bloom = utils.BloomFilter(r, m=10000121, k=5)
-    bloom.insert_key(seed_url)
+    if r.exists(cnt.ELASTICACHE_QUEUE_KEY) is False:
+        seed_url = cnt.WIKI_SEED_URL
+        r.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
+        r.set(hash(seed_url), 1)
+        bloom.insert_key(seed_url)
 
     ssl_context = SSLContext(PROTOCOL_TLSv1)
-    ssl_context.load_verify_locations('/home/ec2-user/AmazonRootCA1.pem')
+    ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
     ssl_context.verify_mode = CERT_REQUIRED
-    auth_provider = PlainTextAuthProvider(username='stokastik-at-147662620103',
-                                          password='su3WZln9x+zGFjCE0dXKMbt58BuaMjdaa953YoIxaLE=')
+    auth_provider = PlainTextAuthProvider(username=cnt.AWS_KEYSPACES_USER,
+                                          password=cnt.AWS_KEYSPACES_PASSWD)
 
-    cluster = Cluster(['cassandra.us-west-2.amazonaws.com'], ssl_context=ssl_context, auth_provider=auth_provider,
-                      port=9142)
-    session = cluster.connect('wiki_crawler')
+    cluster = Cluster([cnt.CASSANDRA_URL], ssl_context=ssl_context, auth_provider=auth_provider,
+                      port=cnt.CASSANDRA_PORT)
 
-    # cluster = Cluster()
-    # session = cluster.connect('wiki_crawler')
+    session = cluster.connect(cnt.WIKI_KEYSPACE_NAME)
 
-    session.execute('CREATE TABLE IF NOT EXISTS crawler(url_hash text PRIMARY KEY, url text, url_text text, parent_url_hash text, inserted_time timestamp);')
+    session.execute(cnt.WIKI_CREATE_TABLE_SQL)
 
-    insert_stmt = session.prepare("INSERT INTO crawler(url, url_hash, url_text, parent_url_hash, inserted_time) VALUES (?, ?, ?, ?, ?)")
+    insert_stmt = session.prepare(cnt.WIKI_INSERT_PREP_STMT)
     insert_stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
 
-    max_threads, max_level, max_urls_per_page, use_bloom = 100, 3, 10, True
+    max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, True
 
-    throttle = utils.Throttle(1.0)
+    throttle = utils.Throttle(cnt.THROTTLE_TIME)
 
     lock = utils.ReadWriteLock()
 
@@ -173,7 +172,6 @@ if __name__ == "__main__":
             threads[i].join()
             print("Completed thread = ", i)
 
-    r.flushall()
     r.close()
     session.shutdown()
 
@@ -186,4 +184,4 @@ if __name__ == "__main__":
         parent_url_hash.append(queue_top[3])
 
     df = pd.DataFrame({'URL': urls, 'URL Hash': url_hashes, 'URL Text': url_text, 'Parent URL Hash': parent_url_hash})
-    df.to_csv('wiki_crawl.csv', index=False, encoding='utf-8')
+    df.to_csv(cnt.WIKI_OUT_FILE, index=False, encoding='utf-8')
