@@ -9,13 +9,19 @@ from fake_useragent import UserAgent
 import crawler_utils as utils
 import urllib.parse
 import redis
+import datetime
+from cassandra.cluster import Cluster
+from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
+from cassandra.auth import PlainTextAuthProvider
+from cassandra import ConsistencyLevel
+import constants as cnt
 
 
-logging.basicConfig(filename='crawler.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.AMZN_LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def insert_metadata(soup, query, q_url, url_hash, level, out_queue):
+def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, session, insert_stmt_search, insert_stmt_details):
     next_level_urls = []
 
     if level == 0:
@@ -59,6 +65,13 @@ def insert_metadata(soup, query, q_url, url_hash, level, out_queue):
                 all += [metadata, time.time()]
 
                 out_queue.put(all)
+
+                if metadata['title'] != '':
+                    session.execute_async(insert_stmt_search,
+                                          [q_url, str(url_hash), query, json.dumps(metadata),
+                                           int(datetime.datetime.now().timestamp() * 1000)])
+                else:
+                    rdis.srem(cnt.AMZN_URL_SET, url_hash)
 
             except Exception as e:
                 logger.error(e)
@@ -104,6 +117,14 @@ def insert_metadata(soup, query, q_url, url_hash, level, out_queue):
 
                 out_queue.put(all)
 
+                if metadata['title'] != '':
+                    session.execute_async(insert_stmt_search,
+                                          [q_url, str(url_hash), query, json.dumps(metadata),
+                                           int(datetime.datetime.now().timestamp() * 1000)])
+                else:
+                    rdis.srem(cnt.AMZN_URL_SET, url_hash)
+
+
             except Exception as e:
                 logger.error(e)
     else:
@@ -143,14 +164,34 @@ def insert_metadata(soup, query, q_url, url_hash, level, out_queue):
         all = [query, q_url, url_hash, metadata, time.time()]
         out_queue.put(all)
 
+        if metadata['title'] != '':
+            session.execute_async(insert_stmt_details,
+                                  [q_url, str(url_hash), query, json.dumps(metadata),
+                                   int(datetime.datetime.now().timestamp() * 1000)])
+        else:
+            rdis.srem(cnt.AMZN_URL_SET, url_hash)
+
     return next_level_urls
 
 
-def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj, ua, max_level=5):
+def add_to_url_queue(rdis, out_queue, session, insert_stmt_search, insert_stmt_details,
+                     throttle, proxies_list_sample_obj, ua):
 
-    for query, q_url, level in q_urls:
+    while True:
         try:
+            out = rdis.blpop(cnt.ELASTICACHE_QUEUE_KEY_AMZN, cnt.REDIS_BLOCKING_TIMEOUT)
+
+            if out is None:
+                break
+
+            _, task = out
+
+            x = json.loads(task)
+            query, q_url, level = x['query'], x['url'], int(x['level'])
+
             url_hash = hash(q_url)
+
+            rdis.sadd(cnt.AMZN_URL_SET, url_hash)
 
             user_agent = ua.random
 
@@ -169,61 +210,16 @@ def add_to_url_queue(q_urls, rdis, out_queue, throttle, proxies_list_sample_obj,
             if r.status_code == 200:
                 soup = BeautifulSoup(r.content, "lxml")
 
-                next_level_urls = insert_metadata(soup, query, q_url, url_hash, level, out_queue)
+                next_level_urls = insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue,
+                                                  session, insert_stmt_search, insert_stmt_details)
 
-                if len(next_level_urls) > 0 and level+1 <= max_level:
+                if len(next_level_urls) > 0:
                     with rdis.pipeline() as pipe:
                         for url in next_level_urls:
-                            rdis.rpush('task_queue', json.dumps({'query': query, 'url': url, 'level': level + 1}))
+                            if rdis.sismember(cnt.AMZN_URL_SET, hash(url)) == 0:
+                                rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN,
+                                           json.dumps({'query': query, 'url': url, 'level': level + 1}))
                         pipe.execute()
-
-        except Exception as e:
-            logger.error(e)
-
-
-def bfs(rdis, out_queue, proxies_list_sample_obj, ua, max_level=5, max_threads=50):
-    curr_level = 0
-
-    while curr_level <= max_level:
-        try:
-            curr_queue_data = []
-
-            with rdis.pipeline() as pipe:
-                while rdis.llen('task_queue') > 0:
-                    x = json.loads(rdis.lpop('task_queue'))
-                    curr_queue_data.append([x['query'], x['url'], x['level']])
-                pipe.execute()
-
-            print("Current level = ", curr_level)
-            print(len(curr_queue_data))
-
-            if len(curr_queue_data) == 0:
-                break
-
-            throttle = utils.Throttle(1.0)
-
-            n_threads = min(max_threads, len(curr_queue_data))
-
-            batch_size = int(math.ceil(len(curr_queue_data) / float(n_threads)))
-            threads = [None] * n_threads
-
-            for i in range(n_threads):
-                print("Starting thread = ", i)
-                start, end = i * batch_size, min((i + 1) * batch_size, len(curr_queue_data))
-                urls = [curr_queue_data[j] for j in range(start, end)]
-
-                threads[i] = threading.Thread(target=add_to_url_queue, args=(urls, rdis, out_queue, throttle,
-                                                                             proxies_list_sample_obj, ua, max_level))
-                threads[i].start()
-
-            print()
-
-            for i in range(n_threads):
-                if threads[i]:
-                    threads[i].join()
-                    print("Completed thread = ", i)
-
-            curr_level += 1
 
         except Exception as e:
             logger.error(e)
@@ -244,7 +240,7 @@ def get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num=5):
 
 
 if __name__ == "__main__":
-    max_threads = 50
+    max_threads = cnt.NUM_THREADS
     max_page_num = 20
 
     search_queries, urls, url_hashes, metadata, timestamp = [], [], [], [], []
@@ -295,18 +291,54 @@ if __name__ == "__main__":
     m = Manager()
     out_queue = m.Queue()
 
-    r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0)
+    r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
 
     with r.pipeline() as pipe:
         for q_url in q_urls:
-            r.rpush('task_queue', json.dumps({'query': q_url[0],  'url': q_url[1], 'level': q_url[2]}))
-
+            if r.sismember(cnt.AMZN_URL_SET, hash(q_url[1])) == 0:
+                r.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN, json.dumps({'query': q_url[0],
+                                                                    'url': q_url[1], 'level': q_url[2]}))
         pipe.execute()
 
-    bfs(r, out_queue, proxies_list_sample_obj, ua, max_level=2, max_threads=max_threads)
+    ssl_context = SSLContext(PROTOCOL_TLSv1)
+    ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
+    ssl_context.verify_mode = CERT_REQUIRED
+    auth_provider = PlainTextAuthProvider(username=cnt.AWS_KEYSPACES_USER,
+                                          password=cnt.AWS_KEYSPACES_PASSWD)
 
-    r.flushall()
+    cluster = Cluster([cnt.CASSANDRA_URL], ssl_context=ssl_context, auth_provider=auth_provider,
+                      port=cnt.CASSANDRA_PORT)
+
+    session = cluster.connect(cnt.AMZN_KEYSPACE_NAME)
+
+    session.execute(cnt.AMZN_CREATE_TABLE_SQL_SEARCH)
+    insert_stmt_search = session.prepare(cnt.AMZN_INSERT_PREP_STMT_SEARCH)
+    insert_stmt_search.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+
+    session.execute(cnt.AMZN_CREATE_TABLE_SQL_DETAILS)
+    insert_stmt_details = session.prepare(cnt.AMZN_INSERT_PREP_STMT_DETAILS)
+    insert_stmt_details.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+
+    throttle = utils.Throttle(cnt.THROTTLE_TIME)
+
+    threads = [None] * max_threads
+
+    for i in range(max_threads):
+        print("Starting thread = ", i)
+        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, out_queue, session,
+                                                                     insert_stmt_search, insert_stmt_details, throttle,
+                                                                     proxies_list_sample_obj, ua))
+        threads[i].start()
+
+    print()
+
+    for i in range(max_threads):
+        if threads[i]:
+            threads[i].join()
+            print("Completed thread = ", i)
+
     r.close()
+    session.shutdown()
 
     while out_queue.empty() is not True:
         queue_top = out_queue.get()
@@ -320,4 +352,4 @@ if __name__ == "__main__":
     df = pd.DataFrame({'Queries': search_queries, 'URLs': urls, 'URL Hashes': url_hashes, 'Metadata': metadata,
                        'Timestamp': timestamp})
 
-    df.to_csv('amazon_title_desc_2.csv', index=False, encoding='utf-8')
+    df.to_csv(cnt.AMZN_OUT_FILE, index=False, encoding='utf-8')
