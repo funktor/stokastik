@@ -25,7 +25,7 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
 
     while True:
         try:
-            out = rdis.blpop('task_queue', cnt.REDIS_BLOCKING_TIMEOUT)
+            out = rdis.blpop(cnt.ELASTICACHE_QUEUE_KEY, cnt.REDIS_BLOCKING_TIMEOUT)
 
             if out is None:
                 break
@@ -58,51 +58,50 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
                                       [q_url, str(url_hash), 'NA', str(parent_url_hash),
                                        int(datetime.datetime.now().timestamp() * 1000)])
 
-                if level+1 <= max_level:
-                    soup = BeautifulSoup(r.content, "lxml")
+                soup = BeautifulSoup(r.content, "lxml")
 
-                    crawled_urls = []
+                crawled_urls = []
 
-                    for d in soup.findAll('a', href=True):
-                        if re.match('^\/wiki\/[^\/\:\.]+$', d['href']):
-                            url = 'https://en.wikipedia.org' + d['href']
-                            crawled_urls.append(url)
+                for d in soup.findAll('a', href=True):
+                    if re.match('^\/wiki\/[^\/\:\.]+$', d['href']):
+                        url = 'https://en.wikipedia.org' + d['href']
+                        crawled_urls.append(url)
 
-                    if len(crawled_urls) <= max_urls_per_page:
-                        crawled_samples = crawled_urls
-                    else:
-                        crawled_weights = [1.0] * max_urls_per_page + [0.1] * (len(crawled_urls) - max_urls_per_page)
-                        sample = utils.Sample(crawled_urls, crawled_weights, False)
-                        crawled_samples = sample.get(max_urls_per_page)
+                if len(crawled_urls) <= max_urls_per_page:
+                    crawled_samples = crawled_urls
+                else:
+                    crawled_weights = [1.0] * max_urls_per_page + [0.1] * (len(crawled_urls) - max_urls_per_page)
+                    sample = utils.Sample(crawled_urls, crawled_weights, False)
+                    crawled_samples = sample.get(max_urls_per_page)
 
 
-                    if use_bloom:
-                        for url in crawled_samples:
-                            lock.acquire_write()
-                            with rdis.pipeline() as pipe:
-                                if bloom.is_present(url) is False:
-                                    rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
+                if use_bloom:
+                    for url in crawled_samples:
+                        lock.acquire_write()
+                        with rdis.pipeline() as pipe:
+                            if bloom.is_present(url) is False:
+                                rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
+                                                                     'parent_url_hash': url_hash}))
+                                bloom.insert_key(url)
+                            pipe.execute()
+                        lock.release_write()
+
+                else:
+                    for url in crawled_samples:
+                        p = hash(url)
+                        with rdis.pipeline() as pipe:
+                            try:
+                                pipe.watch(p)
+
+                                if rdis.exists(p) == 0:
+                                    pipe.multi()
+                                    rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level+1,
                                                                          'parent_url_hash': url_hash}))
-                                    bloom.insert_key(url)
-                                pipe.execute()
-                            lock.release_write()
+                                    rdis.set(p, 1)
+                                    pipe.execute()
 
-                    else:
-                        for url in crawled_samples:
-                            p = hash(url)
-                            with rdis.pipeline() as pipe:
-                                try:
-                                    pipe.watch(p)
-
-                                    if rdis.exists(p) == 0:
-                                        pipe.multi()
-                                        rdis.rpush('task_queue', json.dumps({'url': url, 'level': level+1,
-                                                                             'parent_url_hash': url_hash}))
-                                        rdis.set(p, 1)
-                                        pipe.execute()
-
-                                except redis.WatchError as e:
-                                    logger.warning(e)
+                            except redis.WatchError as e:
+                                logger.warning(e)
         except Exception as e:
             logger.error(e)
 
@@ -154,8 +153,6 @@ if __name__ == "__main__":
 
     insert_stmt = session.prepare(cnt.WIKI_INSERT_PREP_STMT)
     insert_stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
-
-
 
     throttle = utils.Throttle(cnt.THROTTLE_TIME)
 

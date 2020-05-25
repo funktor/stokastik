@@ -1,8 +1,8 @@
 from __future__ import with_statement
 from fabric.api import *
 
-env.hosts = ['ec2-54-214-83-62.us-west-2.compute.amazonaws.com',
-             'ec2-34-209-224-154.us-west-2.compute.amazonaws.com']
+env.hosts = ['ec2-34-217-65-97.us-west-2.compute.amazonaws.com',
+             'ec2-54-185-17-202.us-west-2.compute.amazonaws.com']
 
 env.user = 'ec2-user'
 env.key_filename = ['/Users/funktor/stokastik.pem','/Users/funktor/stokastik.pem',]
