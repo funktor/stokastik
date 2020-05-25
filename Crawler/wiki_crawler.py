@@ -127,7 +127,7 @@ if __name__ == "__main__":
     r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
     bloom = utils.BloomFilter(r, m=cnt.BLOOM_FILTER_SIZE, k=cnt.BLOOM_FILTER_NUM_HASHES)
 
-    if r.exists(cnt.ELASTICACHE_QUEUE_KEY) is False:
+    if r.exists(cnt.ELASTICACHE_QUEUE_KEY) == 0:
         seed_url = cnt.WIKI_SEED_URL
         r.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
         r.set(hash(seed_url), 1)
