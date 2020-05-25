@@ -134,7 +134,7 @@ if __name__ == "__main__":
         r.set(hash(seed_url), 1)
         bloom.insert_key(seed_url)
     else:
-        x = json.load(r.lindex(cnt.ELASTICACHE_QUEUE_KEY, 0))
+        x = json.loads(r.lindex(cnt.ELASTICACHE_QUEUE_KEY, 0))
         curr_level = int(x['level'])
         max_level += curr_level
 
