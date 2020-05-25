@@ -124,6 +124,8 @@ if __name__ == "__main__":
     m = Manager()
     out_queue = m.Queue()
 
+    max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, True
+
     r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
     bloom = utils.BloomFilter(r, m=cnt.BLOOM_FILTER_SIZE, k=cnt.BLOOM_FILTER_NUM_HASHES)
 
@@ -132,6 +134,10 @@ if __name__ == "__main__":
         r.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
         r.set(hash(seed_url), 1)
         bloom.insert_key(seed_url)
+    else:
+        x = json.load(r.lindex(cnt.ELASTICACHE_QUEUE_KEY, 0))
+        curr_level = int(x['level'])
+        max_level += curr_level
 
     ssl_context = SSLContext(PROTOCOL_TLSv1)
     ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
@@ -149,7 +155,7 @@ if __name__ == "__main__":
     insert_stmt = session.prepare(cnt.WIKI_INSERT_PREP_STMT)
     insert_stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
 
-    max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, True
+
 
     throttle = utils.Throttle(cnt.THROTTLE_TIME)
 
