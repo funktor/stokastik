@@ -1,8 +1,8 @@
 from __future__ import with_statement
 from fabric.api import *
 
-env.hosts = ['ec2-34-217-65-97.us-west-2.compute.amazonaws.com',
-             'ec2-54-185-17-202.us-west-2.compute.amazonaws.com']
+env.hosts = ['ec2-54-200-160-4.us-west-2.compute.amazonaws.com',
+             'ec2-52-26-125-82.us-west-2.compute.amazonaws.com']
 
 env.user = 'ec2-user'
 env.key_filename = ['/Users/funktor/stokastik.pem','/Users/funktor/stokastik.pem',]
@@ -38,6 +38,7 @@ def install_redis_cli():
 @parallel
 def git_pull():
     with cd('/home/ec2-user/stokastik'):
+        run('git stash')
         run('git pull origin master')
 
 
