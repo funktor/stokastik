@@ -190,12 +190,13 @@ def sieve(a, b, n):
 
 
 class BloomFilter(object):
-    def __init__(self, rdis, m=17117, k=30, name='bloom'):
+    def __init__(self, rdis, m=17117, k=30, name='bloom', is_counting=False):
         self.rdis = rdis
         self.m = m
         self.k = k
         self.name = name
         self.a1, self.b1, self.a2, self.b2 = 79, 23, 73, 61
+        self.is_counting = is_counting
 
     def get_index_positions(self, key):
         x = hash(key)
@@ -213,7 +214,10 @@ class BloomFilter(object):
         with self.rdis.pipeline() as pipe:
             positions = self.get_index_positions(key)
             for pos in positions:
-                self.rdis.setbit(self.name, pos, 1)
+                if self.is_counting:
+                    self.rdis.hincrby(self.name, pos, 1)
+                else:
+                    self.rdis.setbit(self.name, pos, 1)
             pipe.execute()
 
     def insert_keys(self, keys):
@@ -221,12 +225,43 @@ class BloomFilter(object):
             for key in keys:
                 positions = self.get_index_positions(key)
                 for pos in positions:
-                    self.rdis.setbit(self.name, pos, 1)
+                    if self.is_counting:
+                        self.rdis.hincrby(self.name, pos, 1)
+                    else:
+                        self.rdis.setbit(self.name, pos, 1)
             pipe.execute()
 
     def is_present(self, key):
         with self.rdis.pipeline() as pipe:
             positions = self.get_index_positions(key)
-            out = [self.rdis.getbit(self.name, pos) for pos in positions]
+            if self.is_counting:
+                out = []
+                for pos in positions:
+                    x = self.rdis.hget(self.name, pos)
+                    y = 1 if x is not None else 0
+                    out.append(y)
+            else:
+                out = [self.rdis.getbit(self.name, pos) for pos in positions]
             pipe.execute()
         return all(out)
+
+    def delete_key(self, key):
+        if self.is_counting:
+            if self.is_present(key):
+                with self.rdis.pipeline() as pipe:
+                    positions = self.get_index_positions(key)
+                    for pos in positions:
+                        self.rdis.hincrby(self.name, pos, -1)
+                        x = self.rdis.hget(self.name, pos)
+                        if x == 0:
+                            self.rdis.hdel(self.name, pos)
+                    pipe.execute()
+        else:
+            raise Exception("Feature not available with normal bloom filter")
+
+    def delete_keys(self, keys):
+        if self.is_counting:
+            for key in keys:
+                self.delete_key(key)
+        else:
+            raise Exception("Feature not available with normal bloom filter")

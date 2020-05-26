@@ -15,13 +15,13 @@ from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
 from cassandra.auth import PlainTextAuthProvider
 from cassandra import ConsistencyLevel
 import constants as cnt
-
+import uuid
 
 logging.basicConfig(filename=cnt.AMZN_LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, session, insert_stmt_search, insert_stmt_details):
+def insert_metadata(rdis, soup, query, q_url, url_hash, level, session, insert_stmt_search, insert_stmt_details):
     next_level_urls = []
 
     if level == 0:
@@ -32,7 +32,6 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
                 p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
                 p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
 
-                all = [query, q_url, url_hash]
                 metadata = {}
 
                 if p_title is not None:
@@ -62,13 +61,9 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
                     metadata['product_url'] = ''
                     metadata['product_url_hash'] = ''
 
-                all += [metadata, time.time()]
-
-                out_queue.put(all)
-
                 if metadata['title'] != '':
                     session.execute_async(insert_stmt_search,
-                                          [q_url, str(url_hash), query, json.dumps(metadata),
+                                          [q_url, str(url_hash), query, uuid.uuid1(), json.dumps(metadata),
                                            int(datetime.datetime.now().timestamp() * 1000)])
                 else:
                     rdis.srem(cnt.AMZN_URL_SET, url_hash)
@@ -83,7 +78,6 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
                 p_rating = d.find('span', attrs={'class': 'a-icon-alt'})
                 p_product_url = d.find('a', attrs={'class': 'a-link-normal a-text-normal'}, href=True)
 
-                all = [query, q_url, url_hash]
                 metadata = {}
 
                 if p_title is not None:
@@ -113,13 +107,9 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
                     metadata['product_url'] = ''
                     metadata['product_url_hash'] = ''
 
-                all += [metadata, time.time()]
-
-                out_queue.put(all)
-
                 if metadata['title'] != '':
                     session.execute_async(insert_stmt_search,
-                                          [q_url, str(url_hash), query, json.dumps(metadata),
+                                          [q_url, str(url_hash), query, uuid.uuid1(), json.dumps(metadata),
                                            int(datetime.datetime.now().timestamp() * 1000)])
                 else:
                     rdis.srem(cnt.AMZN_URL_SET, url_hash)
@@ -161,9 +151,6 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
 
         metadata['description'] = utils.sanitize(' '.join(description))
 
-        all = [query, q_url, url_hash, metadata, time.time()]
-        out_queue.put(all)
-
         if metadata['title'] != '':
             session.execute_async(insert_stmt_details,
                                   [q_url, str(url_hash), query, json.dumps(metadata),
@@ -174,8 +161,8 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue, sessio
     return next_level_urls
 
 
-def add_to_url_queue(rdis, out_queue, session, insert_stmt_search, insert_stmt_details,
-                     throttle, proxies_list_sample_obj, ua):
+def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, throttle,
+                     proxies_list_sample_obj, ua):
 
     while True:
         try:
@@ -210,7 +197,7 @@ def add_to_url_queue(rdis, out_queue, session, insert_stmt_search, insert_stmt_d
             if r.status_code == 200:
                 soup = BeautifulSoup(r.content, "lxml")
 
-                next_level_urls = insert_metadata(rdis, soup, query, q_url, url_hash, level, out_queue,
+                next_level_urls = insert_metadata(rdis, soup, query, q_url, url_hash, level,
                                                   session, insert_stmt_search, insert_stmt_details)
 
                 if len(next_level_urls) > 0:
@@ -283,9 +270,6 @@ if __name__ == "__main__":
 
     q_urls = get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num)
 
-    m = Manager()
-    out_queue = m.Queue()
-
     r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
 
     with r.pipeline() as pipe:
@@ -320,8 +304,8 @@ if __name__ == "__main__":
 
     for i in range(max_threads):
         print("Starting thread = ", i)
-        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, out_queue, session,
-                                                                     insert_stmt_search, insert_stmt_details, throttle,
+        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, session, insert_stmt_search,
+                                                                     insert_stmt_details, throttle,
                                                                      proxies_list_sample_obj, ua))
         threads[i].start()
 
@@ -334,17 +318,3 @@ if __name__ == "__main__":
 
     r.close()
     session.shutdown()
-
-    while out_queue.empty() is not True:
-        queue_top = out_queue.get()
-
-        search_queries.append(queue_top[0])
-        urls.append(queue_top[1])
-        url_hashes.append(queue_top[2])
-        metadata.append(json.dumps(queue_top[3]))
-        timestamp.append(queue_top[4])
-
-    df = pd.DataFrame({'Queries': search_queries, 'URLs': urls, 'URL Hashes': url_hashes, 'Metadata': metadata,
-                       'Timestamp': timestamp})
-
-    df.to_csv(cnt.AMZN_OUT_FILE, index=False, encoding='utf-8')
