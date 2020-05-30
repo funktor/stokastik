@@ -78,30 +78,29 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
                 if use_bloom:
                     for url in crawled_samples:
                         lock.acquire_write()
-                        with rdis.pipeline() as pipe:
-                            if bloom.is_present(url) is False:
-                                rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
-                                                                     'parent_url_hash': url_hash}))
-                                bloom.insert_key(url)
-                            pipe.execute()
+                        if bloom.is_present(url) is False:
+                            rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
+                                                                 'parent_url_hash': url_hash}))
+                            bloom.insert_key(url)
                         lock.release_write()
 
                 else:
                     for url in crawled_samples:
                         p = hash(url)
-                        with rdis.pipeline() as pipe:
-                            try:
-                                pipe.watch(p)
+                        try:
+                            pipe = rdis.pipeline()
+                            pipe.watch(p)
 
-                                if rdis.exists(p) == 0:
-                                    pipe.multi()
-                                    rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level+1,
-                                                                         'parent_url_hash': url_hash}))
-                                    rdis.set(p, 1)
-                                    pipe.execute()
+                            pipe.multi()
+                            if rdis.exists(p) == 0:
+                                pipe.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
+                                                                                  'parent_url_hash': url_hash}))
+                                pipe.set(p, 1)
+                            pipe.execute()
 
-                            except redis.WatchError as e:
-                                logger.warning(e)
+                        except redis.WatchError as e:
+                            logger.warning(e)
+
         except Exception as e:
             logger.error(e)
 
