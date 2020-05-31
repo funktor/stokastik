@@ -3,6 +3,7 @@ import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
 from autocomplete_utils import ReadWriteLock
+import rediscluster
 
 logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -94,18 +95,18 @@ class TrieRedis(object):
 
                     if i < len(k):
                         new_child_id = str(uuid.uuid1())
+
+                        pipe = rdis.pipeline(False)
                         d = rdis.hgetall(node_id + ':children')
+                        h = dict(rdis.zrange(node_id + ':top_k', 0, -1, withscores=True))
+                        pipe.execute()
 
                         pipe = rdis.pipeline(False)
                         pipe.set(node_id + ':val', k[:i])
-
                         pipe.delete(node_id + ':children')
                         pipe.hset(node_id + ':children', k[i], new_child_id)
-
                         pipe.set(new_child_id + ':val', k[i:])
-
-                        pipe.zunionstore(new_child_id + ':top_k', [node_id + ':top_k'])
-
+                        pipe.zadd(new_child_id + ':top_k', h)
                         pipe.hmset(new_child_id + ':children', d)
                         pipe.execute()
 
@@ -148,10 +149,17 @@ class TrieRedis(object):
 
 
 class TrieRedisInterface(object):
-    def __init__(self):
+    def __init__(self, cluster_mode=True):
         self.trie = TrieRedis()
         self.lock = ReadWriteLock()
-        self.r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
+
+        if cluster_mode:
+            startup_nodes = [{"host": "redis-cluster.7icodg.clustercfg.usw2.cache.amazonaws.com", "port": "6379"}]
+            self.r = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
+                                               skip_full_coverage_check=True)
+        else:
+            self.r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
+
         self.root_node_id = str(uuid.uuid1())
         self.r.set(self.root_node_id + ':val', '#')
 

@@ -2,6 +2,7 @@ from min_heap import MinHeap
 import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
+from autocomplete_utils import ReadWriteLock
 
 logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -11,6 +12,7 @@ class SimplePrefixDict(object):
     def __init__(self, top_k=10):
         self.prefixes = {}
         self.top_k = top_k
+        self.lock = ReadWriteLock()
 
     def get_size(self):
         s = sys.getsizeof(self.top_k)
@@ -19,6 +21,7 @@ class SimplePrefixDict(object):
         return s
 
     def insert(self, query):
+        self.lock.acquire_write()
         p = ''
         for i in range(len(query)):
             p += query[i]
@@ -30,8 +33,10 @@ class SimplePrefixDict(object):
                     self.prefixes[p].update_key(query, 1)
                 else:
                     self.prefixes[p].pop_n_push((1, query))
+        self.lock.release_write()
 
     def update(self, query, count):
+        self.lock.acquire_write()
         p = ''
         for i in range(len(query)):
             p += query[i]
@@ -43,11 +48,16 @@ class SimplePrefixDict(object):
                     self.prefixes[p].update_key(query, count)
                 else:
                     self.prefixes[p].pop_n_push((count, query))
+        self.lock.release_write()
 
     def search(self, prefix):
+        self.lock.acquire_read()
         if prefix in self.prefixes:
-            return [q for (x, q) in self.prefixes[prefix].arr]
-        return []
+            out = [q for (x, q) in self.prefixes[prefix].arr]
+        else:
+            out = []
+        self.lock.release_read()
+        return out
 
     def save(self, file_path, s_dict):
         with open(file_path, 'wb') as f:
