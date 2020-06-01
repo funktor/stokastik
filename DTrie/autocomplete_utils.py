@@ -5,7 +5,53 @@ import threading, multiprocessing
 from fake_useragent import UserAgent
 import urllib.parse
 import redis
-import rediscluster
+import rediscluster, redlock
+import logging
+import constants as cnt
+
+logging.basicConfig(filename=cnt.AUTOCOMPLETE_LOG_FILE, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logger = logging.getLogger(__name__)
+
+class DistLock:
+    def __init__(self, name='redlock', retry_count=3, retry_delay=0.2):
+        self.name = name
+        self.lock = False
+        self.retry_delay = retry_delay
+        self.retry_count = retry_count
+
+
+    def acquire_lock(self, expires=1000, is_blocking=True):
+        if is_blocking:
+            curr_retry_delay = self.retry_delay
+
+            while True:
+                try:
+                    self.red_lock = redlock.Redlock([{"host": cnt.REDIS_SERVER, "port": cnt.REDIS_PORT, "db": 0}, ],
+                                                    retry_count=self.retry_count, retry_delay=curr_retry_delay)
+
+                    self.lock = self.red_lock.lock(self.name, ttl=expires)
+                    assert self.lock != False
+                    return True
+
+                except Exception as e:
+                    logger.exception("error!!!")
+
+                curr_retry_delay = min(0.2, 2*curr_retry_delay)
+
+        else:
+            self.red_lock = redlock.Redlock([{"host": cnt.REDIS_SERVER, "port": cnt.REDIS_PORT, "db": 0}, ],
+                                            retry_count=self.retry_count, retry_delay=self.retry_delay)
+
+            self.lock = self.red_lock.lock(self.name, ttl=expires)
+            return True if self.lock != False else False
+
+    def release_lock(self):
+        try:
+            self.red_lock.unlock(self.lock)
+
+        except Exception as e:
+            logger.exception("error!!!")
+
 
 class ReadWriteLock:
     def __init__(self, is_threaded=True):
@@ -44,41 +90,35 @@ class ReadWriteLock:
 class SharedFreqTable(object):
     def __init__(self):
         self.freq_table = {}
-        self.lock = ReadWriteLock()
+        self.lock = DistLock()
 
     def add(self, x):
-        self.lock.acquire_write()
+        self.lock.acquire_lock()
         if x not in self.freq_table:
             self.freq_table[x] = 0
 
         self.freq_table[x] += 1
-        self.lock.release_write()
+        self.lock.release_lock()
 
     def is_present(self, x):
-        self.lock.acquire_read()
+        self.lock.acquire_lock()
         out = x in self.freq_table
-        self.lock.release_read()
+        self.lock.release_lock()
         return out
 
     def get(self, x):
-        self.lock.acquire_read()
+        self.lock.acquire_lock()
         if x in self.freq_table:
             out = self.freq_table[x]
         else:
             out = 0
-        self.lock.release_read()
+        self.lock.release_lock()
         return out
 
 
 class BloomFilter(object):
     def __init__(self, m=17117, k=30, name='bloom', is_counting=False, cluster_mode=True):
-        if cluster_mode:
-            startup_nodes = [{"host": "redis-cluster.7icodg.clustercfg.usw2.cache.amazonaws.com", "port": "6379"}]
-            self.rdis = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
-                                               skip_full_coverage_check=True)
-        else:
-            self.rdis = redis.StrictRedis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
-
+        self.rdis = get_redis_connection(cluster_mode)
         self.m = m
         self.k = k
         self.name = name
@@ -152,3 +192,14 @@ class BloomFilter(object):
                 self.delete_key(key)
         else:
             raise Exception("Feature not available with normal bloom filter")
+
+
+def get_redis_connection(cluster_mode=False):
+    if cluster_mode:
+        startup_nodes = [{"host": cnt.REDIS_SERVER, "port": str(cnt.REDIS_PORT)}]
+        r = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
+                                      skip_full_coverage_check=True)
+    else:
+        r = redis.StrictRedis(host=cnt.REDIS_SERVER, port=cnt.REDIS_PORT, db=0, decode_responses=True)
+
+    return r

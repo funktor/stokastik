@@ -6,8 +6,9 @@ from trie import TrieInterface
 from trie_redis import TrieRedisInterface
 from prefix_dict import SimplePrefixDict
 import autocomplete_utils as utils
+import constants as cnt
 
-logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.AUTOCOMPLETE_LOG_FILE, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +75,7 @@ def correctness_test(n=10000):
             print(y)
 
 
-def run(q, freq_table, trie, simpl, seed_strs):
+def run(q, freq_table, trie, seed_strs):
     while True:
         try:
             x, type = q.get(block=True)
@@ -85,22 +86,16 @@ def run(q, freq_table, trie, simpl, seed_strs):
                     print()
                     freq_table.add(x)
                     trie.update(x, freq_table.get(x))
-                    simpl.update(x, freq_table.get(x))
                 else:
                     print('Inserting into trie query ', x)
                     print()
                     freq_table.add(x)
                     trie.insert(x)
-                    simpl.insert(x)
 
             else:
                 print('Searching prefix ', x)
-                out1 = trie.search(x)
-                out2 = simpl.search(x)
-                if sorted(out1) != sorted(out2):
-                    print('!!! Mismatch !!! : ', out1, out2)
-                else:
-                    print('Result : ', out1)
+                out = trie.search(x)
+                print('Result : ', out)
 
                 print()
 
@@ -141,11 +136,10 @@ def multithread_run(num_threads=100, n=100):
     threads = [None] * num_threads
 
     trie = TrieRedisInterface(cluster_mode=False)
-    simpl = SimplePrefixDict()
 
     for i in range(num_threads):
         print("Starting thread = ", i)
-        threads[i] = threading.Thread(target=run, args=(q, freq_table, trie, simpl, strs))
+        threads[i] = threading.Thread(target=run, args=(q, freq_table, trie, strs))
         threads[i].start()
 
     print()
@@ -156,7 +150,39 @@ def multithread_run(num_threads=100, n=100):
             print("Completed thread = ", i)
 
 
+def test_redlock(num_threads=100):
+    threads = [None] * num_threads
+    r = utils.get_redis_connection(False)
+
+    def update(rdis, my_lock):
+        my_lock.acquire_lock(is_blocking=True)
+        x = int(rdis.get('test_key'))
+        rdis.set('test_key', x+1)
+        my_lock.release_lock()
+
+    r.set('test_key', 0)
+    lock = utils.DistLock()
+
+    for i in range(num_threads):
+        print("Starting thread = ", i)
+        threads[i] = threading.Thread(target=update, args=(r,lock))
+        threads[i].start()
+
+    print()
+
+    for i in range(num_threads):
+        if threads[i]:
+            threads[i].join()
+            print("Completed thread = ", i)
+
+    x = int(r.get('test_key'))
+
+    print(x)
+
+    assert x == num_threads
+
+
 if __name__ == "__main__":
     # correctness_test(int(sys.argv[1]))
-    multithread_run(10, 10)
-
+    multithread_run(100, 10)
+    # test_redlock(int(sys.argv[1]))

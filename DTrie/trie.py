@@ -3,13 +3,14 @@ import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
 from autocomplete_utils import ReadWriteLock
+import constants as cnt
 
-logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.AUTOCOMPLETE_LOG_FILE, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
 class Trie(object):
-    def __init__(self, val='#', top_k=10):
+    def __init__(self, val='#', top_k=cnt.TOP_K_RESULTS):
         self.val = val
         self.top_k = top_k
         self.top_k_frequent_queries = MinHeap([], max_size=top_k)

@@ -3,13 +3,14 @@ import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
 from autocomplete_utils import ReadWriteLock
+import constants as cnt
 
-logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.AUTOCOMPLETE_LOG_FILE, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
 class SimplePrefixDict(object):
-    def __init__(self, top_k=10):
+    def __init__(self, top_k=cnt.TOP_K_RESULTS):
         self.prefixes = {}
         self.top_k = top_k
         self.lock = ReadWriteLock()

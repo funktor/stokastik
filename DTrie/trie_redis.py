@@ -2,15 +2,17 @@ from min_heap import MinHeap
 import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
-from autocomplete_utils import ReadWriteLock
+import autocomplete_utils as utils
+from autocomplete_utils import ReadWriteLock, DistLock
 import rediscluster
+import constants as cnt
 
-logging.basicConfig(filename='trie_logger.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.AUTOCOMPLETE_LOG_FILE, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
 class TrieRedis(object):
-    def __init__(self, top_k=10):
+    def __init__(self, top_k=cnt.TOP_K_RESULTS):
         self.top_k = top_k
 
     def print_trie(self, rdis, root_node_id):
@@ -151,32 +153,26 @@ class TrieRedis(object):
 class TrieRedisInterface(object):
     def __init__(self, cluster_mode=True):
         self.trie = TrieRedis()
-        self.lock = ReadWriteLock()
-
-        if cluster_mode:
-            startup_nodes = [{"host": "redis-cluster.7icodg.clustercfg.usw2.cache.amazonaws.com", "port": "6379"}]
-            self.r = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
-                                               skip_full_coverage_check=True)
-        else:
-            self.r = redis.StrictRedis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
+        self.lock = DistLock(cnt.REDLOCK_TRIE_RESOURCE)
+        self.r = utils.get_redis_connection(cluster_mode)
 
         self.root_node_id = str(uuid.uuid1())
         self.r.set(self.root_node_id + ':val', '#')
 
     def insert(self, query):
-        self.lock.acquire_write()
+        self.lock.acquire_lock()
         self.trie.insert(query, query, self.r, self.root_node_id)
-        self.lock.release_write()
+        self.lock.release_lock()
 
     def update(self, query, count):
-        self.lock.acquire_write()
+        self.lock.acquire_lock()
         self.trie.update_top_k(query, query, count, self.r, self.root_node_id)
-        self.lock.release_write()
+        self.lock.release_lock()
 
     def search(self, prefix):
-        self.lock.acquire_read()
+        self.lock.acquire_lock()
         out = self.trie.autocomplete_search(prefix, self.r, self.root_node_id)
-        self.lock.release_read()
+        self.lock.release_lock()
 
         return out
 
