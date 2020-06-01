@@ -18,7 +18,7 @@ def correctness_test(n=10000):
          range(n)]))
     cnts = [random.randint(1, 10 ** 10) for i in range(len(strs))]
 
-    trie = TrieRedisInterface(cluster_mode=False)
+    trie = TrieRedisInterface(cluster_mode=cnt.CLUSTER_MODE)
 
     start = time.time()
     for x in strs:
@@ -135,7 +135,7 @@ def multithread_run(num_threads=100, n=100):
 
     threads = [None] * num_threads
 
-    trie = TrieRedisInterface(cluster_mode=False)
+    trie = TrieRedisInterface(cluster_mode=cnt.CLUSTER_MODE)
 
     for i in range(num_threads):
         print("Starting thread = ", i)
@@ -152,7 +152,7 @@ def multithread_run(num_threads=100, n=100):
 
 def test_redlock(num_threads=100):
     threads = [None] * num_threads
-    r = utils.get_redis_connection(False)
+    r = utils.get_redis_connection(cnt.CLUSTER_MODE)
 
     def update(rdis, my_lock):
         my_lock.acquire_lock(is_blocking=True)
