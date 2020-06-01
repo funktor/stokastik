@@ -4,7 +4,7 @@ import time, random
 import threading, multiprocessing
 from fake_useragent import UserAgent
 import urllib.parse
-import redis
+import redis, uuid
 import rediscluster, redlock
 import logging
 import constants as cnt
@@ -90,29 +90,29 @@ class ReadWriteLock:
 class SharedFreqTable(object):
     def __init__(self):
         self.freq_table = {}
-        self.lock = DistLock()
+        self.lock = CustomRedLock(cnt.REDLOCK_TRIE_RESOURCE, cluster_mode=cnt.CLUSTER_MODE)
 
     def add(self, x):
-        self.lock.acquire_lock()
-        if x not in self.freq_table:
-            self.freq_table[x] = 0
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+            if x not in self.freq_table:
+                self.freq_table[x] = 0
 
-        self.freq_table[x] += 1
-        self.lock.release_lock()
+            self.freq_table[x] += 1
+            self.lock.unlock()
+
+        except Exception as e:
+            logger.exception("error!!!")
 
     def is_present(self, x):
-        self.lock.acquire_lock()
-        out = x in self.freq_table
-        self.lock.release_lock()
-        return out
+        return x in self.freq_table
 
     def get(self, x):
-        self.lock.acquire_lock()
         if x in self.freq_table:
             out = self.freq_table[x]
         else:
             out = 0
-        self.lock.release_lock()
+
         return out
 
 
@@ -203,3 +203,70 @@ def get_redis_connection(cluster_mode=False):
         r = redis.StrictRedis(host=cnt.REDIS_SERVER, port=cnt.REDIS_PORT, db=0, decode_responses=True)
 
     return r
+
+
+class CustomRedLock:
+    def __init__(self, resource_name='redlock', cluster_mode=True):
+        self.resource_name = resource_name
+        self.rdis = get_redis_connection(cluster_mode)
+        self.lock_random_value = str(uuid.uuid1())
+
+    def lock(self, ttl=1000, retry_count=3, retry_delay=200, timeout=5000, is_blocking=False):
+        if is_blocking:
+            start = time.time()
+
+            while True:
+                try:
+                    h = self.rdis.set(self.resource_name, self.lock_random_value, nx=True, px=ttl)
+                    assert h is not None
+                    return True
+
+                except Exception as e:
+                    logger.exception("error!!!")
+
+                time.sleep(retry_delay/1000.0)
+
+                if 1000*(time.time()-start) > timeout:
+                    break
+
+        else:
+            start = time.time()
+
+            for i in range(retry_count):
+                try:
+                    h = self.rdis.set(self.resource_name, self.lock_random_value, nx=True, px=ttl)
+                    assert h is not None
+                    return True
+
+                except Exception as e:
+                    logger.exception("error!!!")
+
+                time.sleep(retry_delay / 1000.0)
+
+                if 1000*(time.time()-start) > timeout:
+                    break
+
+        return False
+
+    def unlock(self):
+        try:
+            h = self.rdis.get(self.resource_name)
+
+            if h is not None and h == self.lock_random_value:
+                self.rdis.delete(self.resource_name)
+                return True
+
+        except Exception as e:
+            logger.exception("error!!!")
+
+        return False
+
+
+    def is_locked(self):
+        try:
+            return self.rdis.exists(self.resource_name)
+
+        except Exception as e:
+            logger.exception("error!!!")
+
+        return False

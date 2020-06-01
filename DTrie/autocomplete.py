@@ -155,13 +155,13 @@ def test_redlock(num_threads=100):
     r = utils.get_redis_connection(cnt.CLUSTER_MODE)
 
     def update(rdis, my_lock):
-        my_lock.acquire_lock(is_blocking=True)
+        my_lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
         x = int(rdis.get('test_key'))
         rdis.set('test_key', x+1)
-        my_lock.release_lock()
+        my_lock.unlock()
 
     r.set('test_key', 0)
-    lock = utils.DistLock()
+    lock = utils.CustomRedLock('redlock_test', cluster_mode=cnt.CLUSTER_MODE)
 
     for i in range(num_threads):
         print("Starting thread = ", i)
@@ -184,5 +184,5 @@ def test_redlock(num_threads=100):
 
 if __name__ == "__main__":
     # correctness_test(int(sys.argv[1]))
-    multithread_run(100, 10)
-    # test_redlock(int(sys.argv[1]))
+    # multithread_run(100, 10)
+    test_redlock(int(sys.argv[1]))

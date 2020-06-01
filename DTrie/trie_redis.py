@@ -3,7 +3,7 @@ import numpy as np, string, random, time
 import sys, pickle, redis, uuid
 import logging
 import autocomplete_utils as utils
-from autocomplete_utils import ReadWriteLock, DistLock
+from autocomplete_utils import ReadWriteLock, DistLock, CustomRedLock
 import rediscluster
 import constants as cnt
 
@@ -153,28 +153,32 @@ class TrieRedis(object):
 class TrieRedisInterface(object):
     def __init__(self, cluster_mode=True):
         self.trie = TrieRedis()
-        self.lock = DistLock(cnt.REDLOCK_TRIE_RESOURCE)
+        self.lock = CustomRedLock(cnt.REDLOCK_TRIE_RESOURCE, cluster_mode=cnt.CLUSTER_MODE)
         self.r = utils.get_redis_connection(cluster_mode)
 
         self.root_node_id = str(uuid.uuid1())
         self.r.set(self.root_node_id + ':val', '#')
 
     def insert(self, query):
-        self.lock.acquire_lock()
-        self.trie.insert(query, query, self.r, self.root_node_id)
-        self.lock.release_lock()
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+            self.trie.insert(query, query, self.r, self.root_node_id)
+            self.lock.unlock()
+
+        except Exception as e:
+            logger.exception("error!!!")
 
     def update(self, query, count):
-        self.lock.acquire_lock()
-        self.trie.update_top_k(query, query, count, self.r, self.root_node_id)
-        self.lock.release_lock()
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+            self.trie.update_top_k(query, query, count, self.r, self.root_node_id)
+            self.lock.unlock()
+
+        except Exception as e:
+            logger.exception("error!!!")
 
     def search(self, prefix):
-        self.lock.acquire_lock()
-        out = self.trie.autocomplete_search(prefix, self.r, self.root_node_id)
-        self.lock.release_lock()
-
-        return out
+        return self.trie.autocomplete_search(prefix, self.r, self.root_node_id)
 
     def save(self, file_path):
         with open(file_path, 'wb') as f:
