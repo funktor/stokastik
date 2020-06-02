@@ -90,7 +90,7 @@ class ReadWriteLock:
 class SharedFreqTable(object):
     def __init__(self):
         self.freq_table = {}
-        self.lock = CustomRedLock(cnt.REDLOCK_TRIE_RESOURCE, cluster_mode=cnt.CLUSTER_MODE)
+        self.lock = CustomRedLock('shared_freq_table_lock', cluster_mode=cnt.CLUSTER_MODE)
 
     def add(self, x):
         try:

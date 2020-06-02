@@ -16,7 +16,7 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra import ConsistencyLevel
 import constants as cnt
 
-logging.basicConfig(filename=cnt.WIKI_LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -77,29 +77,32 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
 
                 if use_bloom:
                     for url in crawled_samples:
-                        lock.acquire_write()
+                        lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
                         if bloom.is_present(url) is False:
                             rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
                                                                  'parent_url_hash': url_hash}))
                             bloom.insert_key(url)
-                        lock.release_write()
+                        lock.unlock()
 
                 else:
                     for url in crawled_samples:
                         p = hash(url)
-                        try:
-                            pipe = rdis.pipeline()
-                            pipe.watch(p)
+                        pipe = rdis.pipeline()
+                        pipe.watch(p)
 
-                            pipe.multi()
+                        try:
                             if rdis.exists(p) == 0:
+                                pipe.multi()
                                 pipe.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
                                                                                   'parent_url_hash': url_hash}))
                                 pipe.set(p, 1)
-                            pipe.execute()
+                                pipe.execute()
 
-                        except redis.WatchError as e:
-                            logger.warning(e)
+                        except Exception as e:
+                            logger.error(e)
+
+                        finally:
+                            pipe.unwatch(p)
 
         except Exception as e:
             logger.error(e)
@@ -124,7 +127,7 @@ if __name__ == "__main__":
 
     max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, True
 
-    r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
+    r = utils.get_redis_connection(cnt.CLUSTER_MODE)
     bloom = utils.BloomFilter(r, m=cnt.BLOOM_FILTER_SIZE, k=cnt.BLOOM_FILTER_NUM_HASHES)
 
     if r.exists(cnt.ELASTICACHE_QUEUE_KEY) == 0:
@@ -155,7 +158,7 @@ if __name__ == "__main__":
 
     throttle = utils.Throttle(cnt.THROTTLE_TIME)
 
-    lock = utils.ReadWriteLock()
+    lock = utils.CustomRedLock('crawler_lock', cluster_mode=cnt.CLUSTER_MODE)
 
     threads = [None] * max_threads
 

@@ -17,7 +17,7 @@ from cassandra import ConsistencyLevel
 import constants as cnt
 import uuid
 
-logging.basicConfig(filename=cnt.AMZN_LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logging.basicConfig(filename=cnt.LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -161,7 +161,7 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, session, insert_s
     return next_level_urls
 
 
-def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, throttle,
+def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, throttle, lock,
                      proxies_list_sample_obj, ua):
 
     while True:
@@ -201,12 +201,22 @@ def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, thr
                                                   session, insert_stmt_search, insert_stmt_details)
 
                 if len(next_level_urls) > 0:
-                    with rdis.pipeline() as pipe:
-                        for url in next_level_urls:
-                            if rdis.sismember(cnt.AMZN_URL_SET, hash(url)) == 0:
-                                rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN,
-                                           json.dumps({'query': query, 'url': url, 'level': level + 1}))
-                        pipe.execute()
+                    lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+
+                    pipe = rdis.pipeline()
+                    for url in next_level_urls:
+                        pipe.sismember(cnt.AMZN_URL_SET, hash(url))
+                    is_present = pipe.execute()
+
+                    pipe = rdis.pipeline()
+                    for i in range(len(next_level_urls)):
+                        url = next_level_urls[i]
+                        if is_present[i] == 0:
+                            pipe.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN,
+                                       json.dumps({'query': query, 'url': url, 'level': level + 1}))
+                    pipe.execute()
+
+                    lock.unlock()
 
         except Exception as e:
             logger.error(e)
@@ -271,14 +281,20 @@ if __name__ == "__main__":
 
     q_urls = get_urls(queries, page_nums_sample_obj, domains_sample_obj, max_page_num)
 
-    r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0)
+    r = utils.get_redis_connection(cnt.CLUSTER_MODE)
 
-    with r.pipeline() as pipe:
-        for q_url in q_urls:
-            if r.sismember(cnt.AMZN_URL_SET, hash(q_url[1])) == 0:
-                r.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN, json.dumps({'query': q_url[0],
-                                                                    'url': q_url[1], 'level': q_url[2]}))
-        pipe.execute()
+    pipe = r.pipeline()
+    for q_url in q_urls:
+        pipe.sismember(cnt.AMZN_URL_SET, hash(q_url[1]))
+    is_present = pipe.execute()
+
+    pipe = r.pipeline()
+    for i in range(len(q_urls)):
+        q_url = q_urls[i]
+        if is_present[i] == 0:
+            pipe.rpush(cnt.ELASTICACHE_QUEUE_KEY_AMZN,
+                       json.dumps({'query': q_url[0], 'url': q_url[1], 'level': q_url[2]}))
+    pipe.execute()
 
     ssl_context = SSLContext(PROTOCOL_TLSv1)
     ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
@@ -303,10 +319,12 @@ if __name__ == "__main__":
 
     threads = [None] * max_threads
 
+    lock = utils.CustomRedLock('amazon_crawler_lock', cluster_mode=cnt.CLUSTER_MODE)
+
     for i in range(max_threads):
         print("Starting thread = ", i)
         threads[i] = threading.Thread(target=add_to_url_queue, args=(r, session, insert_stmt_search,
-                                                                     insert_stmt_details, throttle,
+                                                                     insert_stmt_details, throttle, lock,
                                                                      proxies_list_sample_obj, ua))
         threads[i].start()
 

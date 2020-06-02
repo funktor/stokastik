@@ -4,7 +4,12 @@ import time, random
 import threading, multiprocessing
 from fake_useragent import UserAgent
 import urllib.parse
-import redis
+import redis, uuid
+import constants as cnt
+import logging, rediscluster
+
+logging.basicConfig(filename=cnt.LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logger = logging.getLogger(__name__)
 
 class ReadWriteLock:
     def __init__(self, is_threaded=True):
@@ -40,29 +45,107 @@ class ReadWriteLock:
         self._read_ready.release()
 
 
+def get_redis_connection(cluster_mode=False):
+    if cluster_mode:
+        startup_nodes = [{"host": cnt.ELASTICACHE_URL, "port": str(cnt.ELASTICACHE_PORT)}]
+        r = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
+                                      skip_full_coverage_check=True)
+    else:
+        r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0, decode_responses=True)
+
+    return r
+
+
+class CustomRedLock:
+    def __init__(self, resource_name='redlock', cluster_mode=True):
+        self.resource_name = resource_name
+        self.rdis = get_redis_connection(cluster_mode)
+        self.lock_random_value = str(uuid.uuid1())
+
+    def lock(self, ttl=1000, retry_count=3, retry_delay=200, timeout=5000, is_blocking=False):
+        if is_blocking:
+            start = time.time()
+
+            while True:
+                try:
+                    h = self.rdis.set(self.resource_name, self.lock_random_value, nx=True, px=ttl)
+                    assert h is not None
+                    return True
+
+                except Exception as e:
+                    logger.exception("error!!!")
+
+                time.sleep(retry_delay/1000.0)
+
+                if 1000*(time.time()-start) > timeout:
+                    break
+
+        else:
+            start = time.time()
+
+            for i in range(retry_count):
+                try:
+                    h = self.rdis.set(self.resource_name, self.lock_random_value, nx=True, px=ttl)
+                    assert h is not None
+                    return True
+
+                except Exception as e:
+                    logger.exception("error!!!")
+
+                time.sleep(retry_delay / 1000.0)
+
+                if 1000*(time.time()-start) > timeout:
+                    break
+
+        return False
+
+    def unlock(self):
+        try:
+            h = self.rdis.get(self.resource_name)
+
+            if h is not None and h == self.lock_random_value:
+                self.rdis.delete(self.resource_name)
+                return True
+
+        except Exception as e:
+            logger.exception("error!!!")
+
+        return False
+
+
+    def is_locked(self):
+        try:
+            return self.rdis.exists(self.resource_name)
+
+        except Exception as e:
+            logger.exception("error!!!")
+
+        return False
+
+
 class Throttle(object):
-    def __init__(self, delay, is_threaded=True):
-        self.lock = ReadWriteLock(is_threaded)
+    def __init__(self, delay):
+        self.lock = CustomRedLock('timeout_lock', cluster_mode=cnt.CLUSTER_MODE)
         self.delay = delay
         self.last_accessed_time_domain = {}
-        self.event = threading.Event()
 
     def wait(self, url):
-        self.lock.acquire_read()
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
 
-        domain = urllib.parse.urlparse(url).netloc
-        last_accessed = self.last_accessed_time_domain[domain] if domain in self.last_accessed_time_domain else None
+            domain = urllib.parse.urlparse(url).netloc
+            last_accessed = self.last_accessed_time_domain[domain] if domain in self.last_accessed_time_domain else None
 
-        if self.delay > 0 and last_accessed is not None:
-            sleep_secs = self.delay - (time.time() - last_accessed)
-            if sleep_secs > 0:
-                self.event.wait(sleep_secs)
+            if self.delay > 0 and last_accessed is not None:
+                sleep_secs = self.delay - (time.time() - last_accessed)
+                if sleep_secs > 0:
+                    time.sleep(sleep_secs)
 
-        self.lock.release_read()
+            self.last_accessed_time_domain[domain] = time.time()
+            self.lock.unlock()
 
-        self.lock.acquire_write()
-        self.last_accessed_time_domain[domain] = time.time()
-        self.lock.release_write()
+        except Exception as e:
+            logger.exception("error!!!")
 
 
 class Sample(object):
@@ -112,21 +195,28 @@ class Sample(object):
 
 
 class SharedSet(object):
-    def __init__(self, is_threaded=True):
+    def __init__(self):
         self.shared_set = set()
-        self.lock = ReadWriteLock(is_threaded)
+        self.lock = CustomRedLock('shared_set_lock', cluster_mode=cnt.CLUSTER_MODE)
 
     def get(self, item):
-        self.lock.acquire_read()
-        out = item in self.shared_set
-        self.lock.release_read()
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+            out = item in self.shared_set
+            self.lock.unlock()
+            return out
 
-        return out
+        except Exception as e:
+            logger.exception("error!!!")
 
     def add(self, item):
-        self.lock.acquire_write()
-        self.shared_set.add(item)
-        self.lock.release_write()
+        try:
+            self.lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
+            self.shared_set.add(item)
+            self.lock.unlock()
+
+        except Exception as e:
+            logger.exception("error!!!")
 
 
 def get_free_proxy_list():
