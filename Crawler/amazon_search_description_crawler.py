@@ -55,7 +55,7 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, session, insert_s
                     url = scheme + '://' + domain + p_product_url['href']
 
                     metadata['product_url'] = url
-                    metadata['product_url_hash'] = hash(url)
+                    metadata['product_url_hash'] = utils.get_hash(url)
                     next_level_urls.append(url)
                 else:
                     metadata['product_url'] = ''
@@ -101,7 +101,7 @@ def insert_metadata(rdis, soup, query, q_url, url_hash, level, session, insert_s
                     url = scheme + '://' + domain + p_product_url['href']
 
                     metadata['product_url'] = url
-                    metadata['product_url_hash'] = hash(url)
+                    metadata['product_url_hash'] = utils.get_hash(url)
                     next_level_urls.append(url)
                 else:
                     metadata['product_url'] = ''
@@ -176,7 +176,7 @@ def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, thr
             x = json.loads(task)
             query, q_url, level = x['query'], x['url'], int(x['level'])
 
-            url_hash = hash(q_url)
+            url_hash = utils.get_hash(q_url)
 
             rdis.sadd(cnt.AMZN_URL_SET, url_hash)
 
@@ -205,7 +205,7 @@ def add_to_url_queue(rdis, session, insert_stmt_search, insert_stmt_details, thr
 
                     pipe = rdis.pipeline()
                     for url in next_level_urls:
-                        pipe.sismember(cnt.AMZN_URL_SET, hash(url))
+                        pipe.sismember(cnt.AMZN_URL_SET, utils.get_hash(url))
                     is_present = pipe.execute()
 
                     pipe = rdis.pipeline()
@@ -285,7 +285,7 @@ if __name__ == "__main__":
 
     pipe = r.pipeline()
     for q_url in q_urls:
-        pipe.sismember(cnt.AMZN_URL_SET, hash(q_url[1]))
+        pipe.sismember(cnt.AMZN_URL_SET, utils.get_hash(q_url[1]))
     is_present = pipe.execute()
 
     pipe = r.pipeline()
@@ -296,14 +296,7 @@ if __name__ == "__main__":
                        json.dumps({'query': q_url[0], 'url': q_url[1], 'level': q_url[2]}))
     pipe.execute()
 
-    ssl_context = SSLContext(PROTOCOL_TLSv1)
-    ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
-    ssl_context.verify_mode = CERT_REQUIRED
-    auth_provider = PlainTextAuthProvider(username=cnt.AWS_KEYSPACES_USER,
-                                          password=cnt.AWS_KEYSPACES_PASSWD)
-
-    cluster = Cluster([cnt.CASSANDRA_URL], ssl_context=ssl_context, auth_provider=auth_provider,
-                      port=cnt.CASSANDRA_PORT)
+    cluster = utils.get_cassandra_connection(cnt.CLUSTER_MODE)
 
     session = cluster.connect(cnt.AMZN_KEYSPACE_NAME)
 

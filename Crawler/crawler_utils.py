@@ -7,6 +7,12 @@ import urllib.parse
 import redis, uuid
 import constants as cnt
 import logging, rediscluster
+from datetime import datetime, timedelta
+from dateutil.relativedelta import *
+from cassandra.cluster import Cluster
+from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
+from cassandra.auth import PlainTextAuthProvider
+import hashlib
 
 logging.basicConfig(filename=cnt.LOGGER, level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -51,9 +57,24 @@ def get_redis_connection(cluster_mode=False):
         r = rediscluster.RedisCluster(startup_nodes=startup_nodes, decode_responses=True,
                                       skip_full_coverage_check=True)
     else:
-        r = redis.StrictRedis(host=cnt.ELASTICACHE_URL, port=cnt.ELASTICACHE_PORT, db=0, decode_responses=True)
+        r = redis.StrictRedis(host='127.0.0.1', port=cnt.ELASTICACHE_PORT, db=0, decode_responses=True)
 
     return r
+
+def get_cassandra_connection(cluster_mode=False):
+    if cluster_mode:
+        ssl_context = SSLContext(PROTOCOL_TLSv1)
+        ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
+        ssl_context.verify_mode = CERT_REQUIRED
+        auth_provider = PlainTextAuthProvider(username=cnt.AWS_KEYSPACES_USER,
+                                              password=cnt.AWS_KEYSPACES_PASSWD)
+
+        cluster = Cluster([cnt.CASSANDRA_URL], ssl_context=ssl_context, auth_provider=auth_provider,
+                          port=cnt.CASSANDRA_PORT)
+    else:
+        cluster = Cluster(['127.0.0.1'], port=9042)
+
+    return cluster
 
 
 class CustomRedLock:
@@ -300,52 +321,87 @@ class BloomFilter(object):
 
         return positions
 
-    def insert_key(self, key):
-        with self.rdis.pipeline() as pipe:
-            positions = self.get_index_positions(key)
+    def insert_key(self, key, pipe=None):
+        positions = self.get_index_positions(key)
+
+        if pipe is not None:
             for pos in positions:
                 if self.is_counting:
-                    self.rdis.hincrby(self.name, pos, 1)
+                    pipe.hincrby(self.name, pos, 1)
                 else:
-                    self.rdis.setbit(self.name, pos, 1)
-            pipe.execute()
+                    pipe.setbit(self.name, pos, 1)
+            return pipe
 
-    def insert_keys(self, keys):
-        with self.rdis.pipeline() as pipe:
+        else:
+            pipe = self.rdis.pipeline()
+
+            for pos in positions:
+                if self.is_counting:
+                    pipe.hincrby(self.name, pos, 1)
+                else:
+                    pipe.setbit(self.name, pos, 1)
+
+            pipe.execute()
+            return 1
+
+    def insert_keys(self, keys, pipe=None):
+        if pipe is not None:
+            for key in keys:
+                pipe = self.insert_key(key, pipe)
+            return pipe
+
+        else:
+            pipe = self.rdis.pipeline()
             for key in keys:
                 positions = self.get_index_positions(key)
                 for pos in positions:
                     if self.is_counting:
-                        self.rdis.hincrby(self.name, pos, 1)
+                        pipe.hincrby(self.name, pos, 1)
                     else:
-                        self.rdis.setbit(self.name, pos, 1)
+                        pipe.setbit(self.name, pos, 1)
             pipe.execute()
+            return 1
 
     def is_present(self, key):
-        with self.rdis.pipeline() as pipe:
-            positions = self.get_index_positions(key)
-            if self.is_counting:
-                out = []
-                for pos in positions:
-                    x = self.rdis.hget(self.name, pos)
-                    y = 1 if x is not None else 0
-                    out.append(y)
-            else:
-                out = [self.rdis.getbit(self.name, pos) for pos in positions]
-            pipe.execute()
+        positions = self.get_index_positions(key)
+
+        if self.is_counting:
+            pipe = self.rdis.pipeline()
+            for pos in positions:
+                pipe.hget(self.name, pos)
+            out = pipe.execute()
+
+            out = [1 if x is not None else 0 for x in out]
+
+        else:
+            pipe = self.rdis.pipeline()
+            for pos in positions:
+                pipe.getbit(self.name, pos)
+            out = pipe.execute()
+
         return all(out)
 
     def delete_key(self, key):
         if self.is_counting:
             if self.is_present(key):
-                with self.rdis.pipeline() as pipe:
-                    positions = self.get_index_positions(key)
-                    for pos in positions:
-                        self.rdis.hincrby(self.name, pos, -1)
-                        x = self.rdis.hget(self.name, pos)
-                        if x == 0:
-                            self.rdis.hdel(self.name, pos)
-                    pipe.execute()
+                positions = self.get_index_positions(key)
+
+                pipe = self.rdis.pipeline()
+                for pos in positions:
+                    pipe.hincrby(self.name, pos, -1)
+                pipe.execute()
+
+                pipe = self.rdis.pipeline()
+                for pos in positions:
+                    pipe.hget(self.name, pos)
+                x = pipe.execute()
+
+                pipe = self.rdis.pipeline()
+                for i in range(len(positions)):
+                    if x[i] == 0:
+                        pipe.hdel(self.name, positions[i])
+                pipe.execute()
+
         else:
             raise Exception("Feature not available with normal bloom filter")
 
@@ -355,3 +411,32 @@ class BloomFilter(object):
                 self.delete_key(key)
         else:
             raise Exception("Feature not available with normal bloom filter")
+
+
+def get_pageviews(url, headers=None, proxies=None):
+    try:
+        page_title = re.sub('https://.*?\/wiki/(.*)', '\\1', url)
+
+        curr_date = datetime.today()
+        old_date = curr_date + relativedelta(months=-6)
+
+        stat_url = 'https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia.org/all-access/user/'
+        stat_url += page_title
+        stat_url += '/monthly/' + old_date.strftime('%Y%m%d') + '/' + curr_date.strftime('%Y%m%d')
+
+        r_stat = requests.get(stat_url, headers=headers, proxies=proxies)
+        resp = r_stat.json()
+
+        views = 0
+
+        if 'items' in resp:
+            for x in resp['items']:
+                views += x['views']
+
+        return views
+
+    except Exception as e:
+        logger.exception("error!!!")
+
+def get_hash(s):
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()

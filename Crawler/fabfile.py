@@ -1,8 +1,8 @@
 from __future__ import with_statement
 from fabric.api import *
 
-env.hosts = ['ec2-54-200-160-4.us-west-2.compute.amazonaws.com',
-             'ec2-52-26-125-82.us-west-2.compute.amazonaws.com']
+env.hosts = ['ec2-54-212-13-213.us-west-2.compute.amazonaws.com',
+             'ec2-54-191-89-62.us-west-2.compute.amazonaws.com']
 
 env.user = 'ec2-user'
 env.key_filename = ['/Users/funktor/stokastik.pem','/Users/funktor/stokastik.pem',]
@@ -25,6 +25,7 @@ def install_packages_libraries():
     run('pip3 install pandas')
     run('pip3 install requests')
     run('pip3 install lxml')
+    run('pip3 install cassandra-driver')
     sudo('yum install git')
     run('git clone https://github.com/funktor/stokastik.git')
 
@@ -33,6 +34,8 @@ def install_packages_libraries():
 def install_redis_cli():
     sudo('yum --enablerepo=epel install redis')
     run('pip3 install redis')
+    run('pip3 install redis-py-cluster')
+    run('pip3 install redlock-py')
 
 
 @parallel

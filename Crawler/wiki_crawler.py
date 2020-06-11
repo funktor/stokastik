@@ -4,15 +4,10 @@ import pandas as pd, numpy as np
 import time, math, random
 from multiprocessing import Process, Queue, Pool, Manager
 import threading, json
-import sys
 import logging
 from fake_useragent import UserAgent
 import crawler_utils as utils
-import redis
 import datetime
-from cassandra.cluster import Cluster
-from ssl import SSLContext, PROTOCOL_TLSv1, CERT_REQUIRED
-from cassandra.auth import PlainTextAuthProvider
 from cassandra import ConsistencyLevel
 import constants as cnt
 
@@ -20,22 +15,22 @@ logging.basicConfig(filename=cnt.LOGGER, level=logging.DEBUG, format='%(asctime)
 logger = logging.getLogger(__name__)
 
 
-def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, proxies_list_sample_obj, ua, lock, max_level=5,
+def add_to_url_queue(rdis, bloom, session, insert_stmt, throttle, proxies_list_sample_obj, ua, lock,
                      max_urls_per_page=10, use_bloom=True):
 
     while True:
         try:
-            out = rdis.blpop(cnt.ELASTICACHE_QUEUE_KEY, cnt.REDIS_BLOCKING_TIMEOUT)
+            out = rdis.bzpopmax(cnt.ELASTICACHE_QUEUE_KEY, cnt.REDIS_BLOCKING_TIMEOUT)
 
             if out is None:
                 break
 
-            _, task = out
+            _, task, score = out
 
             x = json.loads(task)
             q_url, level, parent_url_hash = x['url'], int(x['level']), x['parent_url_hash']
 
-            url_hash = hash(q_url)
+            url_hash = utils.get_hash(q_url)
 
             user_agent = ua.random
 
@@ -52,10 +47,8 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
             r = requests.get(q_url, headers=headers, proxies=proxies)
 
             if r.status_code == 200:
-                out_queue.put([q_url, url_hash, 'NA', parent_url_hash])
-
                 session.execute_async(insert_stmt,
-                                      [q_url, str(url_hash), 'NA', str(parent_url_hash),
+                                      [q_url, url_hash, 'NA', str(parent_url_hash),
                                        int(datetime.datetime.now().timestamp() * 1000)])
 
                 soup = BeautifulSoup(r.content, "lxml")
@@ -74,35 +67,45 @@ def add_to_url_queue(rdis, bloom, out_queue, session, insert_stmt, throttle, pro
                     sample = utils.Sample(crawled_urls, crawled_weights, False)
                     crawled_samples = sample.get(max_urls_per_page)
 
-
                 if use_bloom:
                     for url in crawled_samples:
+                        view = utils.get_pageviews(url, headers, proxies)
+                        comp = json.dumps({'url': url, 'level': level + 1, 'parent_url_hash': url_hash})
+
                         lock.lock(ttl=1000, retry_delay=200, timeout=10000, is_blocking=True)
-                        if bloom.is_present(url) is False:
-                            rdis.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
-                                                                 'parent_url_hash': url_hash}))
-                            bloom.insert_key(url)
+
+                        try:
+                            if bloom.is_present(url) is False:
+                                pipe = rdis.pipeline()
+                                pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
+                                pipe = bloom.insert_key(url, pipe)
+                                pipe.execute()
+
+                        except Exception as e:
+                            logger.error(e)
+
                         lock.unlock()
 
                 else:
                     for url in crawled_samples:
-                        p = hash(url)
+                        view = utils.get_pageviews(url, headers, proxies)
+                        comp = json.dumps({'url': url, 'level': level + 1, 'parent_url_hash': url_hash})
+
+                        p = utils.get_hash(url)
                         pipe = rdis.pipeline()
                         pipe.watch(p)
 
                         try:
                             if rdis.exists(p) == 0:
                                 pipe.multi()
-                                pipe.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': url, 'level': level + 1,
-                                                                                  'parent_url_hash': url_hash}))
+                                pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
                                 pipe.set(p, 1)
                                 pipe.execute()
+                            else:
+                                pipe.unwatch()
 
                         except Exception as e:
                             logger.error(e)
-
-                        finally:
-                            pipe.unwatch(p)
 
         except Exception as e:
             logger.error(e)
@@ -122,35 +125,21 @@ if __name__ == "__main__":
 
     proxies_list_sample_obj = utils.Sample(proxies_list, proxies_list_weights)
 
-    m = Manager()
-    out_queue = m.Queue()
-
-    max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, True
+    max_threads, max_level, max_urls_per_page, use_bloom = cnt.NUM_THREADS, cnt.WIKI_MAX_LEVEL, cnt.WIKI_MAX_URLS_PER_PAGE, False
 
     r = utils.get_redis_connection(cnt.CLUSTER_MODE)
     bloom = utils.BloomFilter(r, m=cnt.BLOOM_FILTER_SIZE, k=cnt.BLOOM_FILTER_NUM_HASHES)
 
     if r.exists(cnt.ELASTICACHE_QUEUE_KEY) == 0:
         seed_url = cnt.WIKI_SEED_URL
-        r.rpush(cnt.ELASTICACHE_QUEUE_KEY, json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''}))
-        r.set(hash(seed_url), 1)
+        comp = json.dumps({'url': seed_url, 'level': 0, 'parent_url_hash': ''})
+        r.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp:1})
+        r.set(utils.get_hash(seed_url), 1)
         bloom.insert_key(seed_url)
-    else:
-        x = json.loads(r.lindex(cnt.ELASTICACHE_QUEUE_KEY, 0))
-        curr_level = int(x['level'])
-        max_level += curr_level
 
-    ssl_context = SSLContext(PROTOCOL_TLSv1)
-    ssl_context.load_verify_locations(cnt.AWS_KEYSPACES_PEM)
-    ssl_context.verify_mode = CERT_REQUIRED
-    auth_provider = PlainTextAuthProvider(username=cnt.AWS_KEYSPACES_USER,
-                                          password=cnt.AWS_KEYSPACES_PASSWD)
-
-    cluster = Cluster([cnt.CASSANDRA_URL], ssl_context=ssl_context, auth_provider=auth_provider,
-                      port=cnt.CASSANDRA_PORT)
+    cluster = utils.get_cassandra_connection(cnt.CLUSTER_MODE)
 
     session = cluster.connect(cnt.WIKI_KEYSPACE_NAME)
-
     session.execute(cnt.WIKI_CREATE_TABLE_SQL)
 
     insert_stmt = session.prepare(cnt.WIKI_INSERT_PREP_STMT)
@@ -164,10 +153,9 @@ if __name__ == "__main__":
 
     for i in range(max_threads):
         print("Starting thread = ", i)
-        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, bloom, out_queue, session,
-                                                                     insert_stmt, throttle,
+        threads[i] = threading.Thread(target=add_to_url_queue, args=(r, bloom, session, insert_stmt, throttle,
                                                                      proxies_list_sample_obj, ua, lock,
-                                                                     max_level, max_urls_per_page, use_bloom))
+                                                                     max_urls_per_page, use_bloom))
         threads[i].start()
 
     print()
@@ -176,17 +164,3 @@ if __name__ == "__main__":
         if threads[i]:
             threads[i].join()
             print("Completed thread = ", i)
-
-    r.close()
-    session.shutdown()
-
-    while out_queue.empty() is not True:
-        queue_top = out_queue.get()
-
-        urls.append(queue_top[0])
-        url_hashes.append(queue_top[1])
-        url_text.append(queue_top[2])
-        parent_url_hash.append(queue_top[3])
-
-    df = pd.DataFrame({'URL': urls, 'URL Hash': url_hashes, 'URL Text': url_text, 'Parent URL Hash': parent_url_hash})
-    df.to_csv(cnt.WIKI_OUT_FILE, index=False, encoding='utf-8')
