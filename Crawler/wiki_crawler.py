@@ -47,11 +47,18 @@ def add_to_url_queue(rdis, bloom, session, insert_stmt, throttle, proxies_list_s
             r = requests.get(q_url, headers=headers, proxies=proxies)
 
             if r.status_code == 200:
-                session.execute_async(insert_stmt,
-                                      [q_url, url_hash, 'NA', str(parent_url_hash),
-                                       int(datetime.datetime.now().timestamp() * 1000)])
-
                 soup = BeautifulSoup(r.content, "lxml")
+
+                content = []
+                for d in soup.findAll('p'):
+                    if d is not None:
+                        content += [utils.sanitize(d.text)]
+
+                content = ' '.join(content)
+
+                session.execute_async(insert_stmt,
+                                      [q_url, url_hash, content, str(parent_url_hash),
+                                       int(datetime.datetime.now().timestamp() * 1000)])
 
                 crawled_urls = []
 
@@ -77,9 +84,18 @@ def add_to_url_queue(rdis, bloom, session, insert_stmt, throttle, proxies_list_s
                         try:
                             if bloom.is_present(url) is False:
                                 pipe = rdis.pipeline()
-                                pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
-                                pipe = bloom.insert_key(url, pipe)
-                                pipe.execute()
+
+                                if rdis.zcard(cnt.ELASTICACHE_QUEUE_KEY) < cnt.MAXIMUM_QUEUE_SIZE:
+                                    pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
+                                    pipe = bloom.insert_key(url, pipe)
+                                    pipe.execute()
+
+                                else:
+                                    if rdis.zrange(cnt.ELASTICACHE_QUEUE_KEY, 0, 0, withscores=True)[0][1] < view:
+                                        pipe.zpopmin(cnt.ELASTICACHE_QUEUE_KEY)
+                                        pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
+                                        pipe = bloom.insert_key(url, pipe)
+                                        pipe.execute()
 
                         except Exception as e:
                             logger.error(e)
@@ -97,10 +113,19 @@ def add_to_url_queue(rdis, bloom, session, insert_stmt, throttle, proxies_list_s
 
                         try:
                             if rdis.exists(p) == 0:
-                                pipe.multi()
-                                pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
-                                pipe.set(p, 1)
-                                pipe.execute()
+                                if rdis.zcard(cnt.ELASTICACHE_QUEUE_KEY) < cnt.MAXIMUM_QUEUE_SIZE:
+                                    pipe.multi()
+                                    pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
+                                    pipe.set(p, 1)
+                                    pipe.execute()
+
+                                else:
+                                    if rdis.zrange(cnt.ELASTICACHE_QUEUE_KEY, 0, 0, withscores=True)[0][1] < view:
+                                        pipe.multi()
+                                        pipe.zpopmin(cnt.ELASTICACHE_QUEUE_KEY)
+                                        pipe.zadd(cnt.ELASTICACHE_QUEUE_KEY, {comp: view})
+                                        pipe.set(p, 1)
+                                        pipe.execute()
                             else:
                                 pipe.unwatch()
 
