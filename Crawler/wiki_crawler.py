@@ -55,6 +55,7 @@ def add_to_url_queue(rdis, bloom, session, insert_stmt, throttle, proxies_list_s
                         content += [utils.sanitize(d.text)]
 
                 content = ' '.join(content)
+                content = re.sub("\s\s+", " ", content)
 
                 session.execute_async(insert_stmt,
                                       [q_url, url_hash, content, str(parent_url_hash),

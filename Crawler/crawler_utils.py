@@ -310,7 +310,7 @@ class BloomFilter(object):
         self.is_counting = is_counting
 
     def get_index_positions(self, key):
-        x = hash(key)
+        x = int(get_hash(key), 16) % self.m
         positions = [-1]*self.k
 
         for i in range(self.k):
