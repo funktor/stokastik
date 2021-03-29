@@ -198,7 +198,7 @@ pycrypto==2.6.1
 pycryptodome==3.8.1
 pycurl==7.43.0
 pyflakes==1.6.0
-Pygments==2.2.0
+Pygments==2.7.4
 pyhdb==0.3.4
 PyJWT==1.7.1
 pykerberos==1.2.1
