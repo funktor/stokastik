@@ -229,7 +229,7 @@ requests==2.21.0
 requests-kerberos==0.12.0
 rfc3986==1.1.0
 rope==0.10.5
-rsa==4.0
+rsa==4.7
 ruamel.yaml==0.15.37
 s3transfer==0.2.0
 sasl==0.2.1
