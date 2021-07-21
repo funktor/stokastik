@@ -1,0 +1,4 @@
+{
+    "profile_id": {"S": "10"},
+    "metadata": {"S": "{\"name\":\"tony stark\",\"email\":\"abhi2iitk@gmail.com\",\"phone\":\"9980685127\"}"}
+}

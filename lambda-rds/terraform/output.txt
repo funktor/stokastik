@@ -1,0 +1,1 @@
+{"errorMessage": "name 'random_date' is not defined", "errorType": "NameError", "stackTrace": ["  File \"/var/task/app.py\", line 48, in handler\n    dates.append(random_date(d1, d2))\n"]}

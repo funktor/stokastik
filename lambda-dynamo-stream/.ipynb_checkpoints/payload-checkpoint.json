@@ -1,0 +1,31 @@
+{
+    "Records": [
+        {
+            "eventID": "7de3041dd709b024af6f29e4fa13d34c",
+            "eventName": "INSERT",
+            "eventVersion": "1.1",
+            "eventSource": "aws:dynamodb",
+            "awsRegion": "us-east-1",
+            "dynamodb": {
+                "ApproximateCreationDateTime": 1479499740,
+                "Keys": {
+                    "profile_id": {
+                        "S": "1"
+                    }
+                },
+                "NewImage": {
+                    "profile_id": {
+                        "S": "1"
+                    },
+                    "metadata": {
+                        "S": "{\"name\":\"abhijit mondal\",\"email\":\"abhi2iitk@gmail.com\",\"phone\":\"8884941784\"}"
+                    }
+                },
+                "SequenceNumber": "13021600000000001596893679",
+                "SizeBytes": 112,
+                "StreamViewType": "NEW_IMAGE"
+            },
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:627048988170:table/Profiles/stream/2021-07-20T11:15:40.432"
+        }
+    ]
+}

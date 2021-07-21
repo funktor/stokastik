@@ -1,0 +1,1 @@
+{"errorMessage": "'Records'", "errorType": "KeyError", "stackTrace": ["  File \"/var/task/app.py\", line 91, in handler\n    for record in event['Records']:\n"]}
