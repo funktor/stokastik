@@ -2,7 +2,7 @@ Cython==0.26.1
 docker==3.6.0
 docker-pycreds==0.4.0
 Flask==0.12.2
-Flask-Cors==3.0.3
+Flask-Cors==3.0.9
 gensim==3.7.3
 ImageHash==4.0
 joblib==0.10.3
