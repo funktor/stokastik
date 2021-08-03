@@ -1,0 +1,9 @@
+model/
+test_dir/
+*.jpg
+*.png
+.ipynb_checkpoints/
+__pycache__/
+*tfstate*
+*lock*
+
