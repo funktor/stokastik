@@ -115,7 +115,7 @@ jupyter-client==5.2.3
 jupyter-console==5.2.0
 jupyter-core==4.4.0
 jupyter-tensorboard==0.1.5
-jupyterlab==0.27.0
+jupyterlab==1.2.21
 jupyterlab-launcher==0.4.0
 kafka-python==1.4.3
 Keras==2.2.4
