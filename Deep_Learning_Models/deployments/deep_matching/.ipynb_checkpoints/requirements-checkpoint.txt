@@ -156,7 +156,7 @@ numpy==1.14.3
 numpydoc==0.7.0
 odo==0.5.0
 olefile==0.44
-opencv-python==4.1.0.25
+opencv-python==4.2.0.32
 openpyxl==2.4.8
 oslo.config==5.2.0
 oslo.i18n==3.19.0
