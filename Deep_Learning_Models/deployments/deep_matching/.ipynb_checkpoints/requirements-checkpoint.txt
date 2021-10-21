@@ -15,7 +15,7 @@ azure-nspkg==3.0.2
 azure-storage-blob==1.4.0
 azure-storage-common==1.4.0
 azure-storage-nspkg==3.0.0
-Babel==2.5.3
+Babel==2.9.1
 backcall==0.1.0
 backoff==1.4.3
 backports.csv==1.0.7
