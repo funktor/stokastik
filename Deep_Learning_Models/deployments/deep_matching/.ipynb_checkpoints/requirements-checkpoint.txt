@@ -53,7 +53,7 @@ cx-Oracle==6.1
 cycler==0.10.0
 Cython==0.26.1
 cytoolz==0.8.2
-dask==0.15.3
+dask==2021.10.0
 datashape==0.5.2
 DAWG==0.7.8
 debtcollector==1.19.0
