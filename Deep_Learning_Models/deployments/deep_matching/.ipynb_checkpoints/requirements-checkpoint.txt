@@ -98,7 +98,7 @@ imageio==2.2.0
 imagesize==0.7.1
 impyla==0.14.0
 ipykernel==4.8.2
-ipython==6.3.1
+ipython==7.16.3
 ipython-genutils==0.2.0
 ipywidgets==7.0.0
 iso8601==0.1.12
