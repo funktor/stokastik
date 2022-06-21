@@ -12,7 +12,7 @@ keras-metrics==1.1.0
 Keras-Preprocessing==1.0.9
 matplotlib==2.1.0
 nltk==3.2.4
-numpy==1.14.3
+numpy==1.22.0
 opencv-python==4.1.0.25
 pandas==0.20.3
 Pillow==4.2.1
