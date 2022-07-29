@@ -133,7 +133,7 @@ Markdown==2.6.11
 MarkupSafe==1.0
 matplotlib==2.1.0
 mccabe==0.6.1
-mistune==0.8.3
+mistune==2.0.3
 mlpdtf-cli===0.0.54-SNAPSHOT
 mlutils-py3===0.0.105-SNAPSHOT
 monotonic==1.4
