@@ -161,7 +161,7 @@ openpyxl==2.4.8
 oslo.config==5.2.0
 oslo.i18n==3.19.0
 oslo.serialization==2.23.0
-oslo.utils==3.35.0
+oslo.utils==4.10.1
 packaging==16.8
 pandas==0.20.3
 pandocfilters==1.4.2
