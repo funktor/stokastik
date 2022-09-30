@@ -5,7 +5,7 @@ Flask==0.12.2
 Flask-Cors==3.0.3
 gensim==3.7.3
 ImageHash==4.0
-joblib==0.10.3
+joblib==1.2.0
 Keras==2.2.4
 Keras-Applications==1.0.7
 keras-metrics==1.1.0
