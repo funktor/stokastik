@@ -37,7 +37,7 @@ Bottleneck==1.2.1
 cachetools==3.0.0
 caspanda==0.0.0.4
 cassandra-driver==3.14.0
-certifi==2019.3.9
+certifi==2022.12.7
 cffi==1.11.5
 chardet==3.0.4
 cheroot==6.5.5
